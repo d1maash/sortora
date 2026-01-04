@@ -16,7 +16,7 @@ import { Executor } from './core/executor.js';
 import { Watcher } from './core/watcher.js';
 import { Database } from './storage/database.js';
 import { ModelManager } from './ai/model-manager.js';
-import { renderScanStats } from './ui/table.js';
+import { renderScanStats, renderFileTable } from './ui/table.js';
 import { logger } from './utils/logger.js';
 
 const program = new Command();
@@ -103,6 +103,7 @@ program
   .description('Scan a directory and analyze files')
   .option('-d, --deep', 'Scan recursively')
   .option('--duplicates', 'Find duplicate files')
+  .option('--ai', 'Use AI for smart classification')
   .option('--json', 'Output as JSON')
   .action(async (targetPath, options) => {
     const fullPath = resolve(expandPath(targetPath));
@@ -121,6 +122,18 @@ program
     const scanner = new Scanner(db);
     const analyzer = new Analyzer(paths.modelsDir);
 
+    // Enable AI if requested
+    if (options.ai) {
+      const aiSpinner = ora('Loading AI models...').start();
+      try {
+        await analyzer.enableAI();
+        aiSpinner.succeed('AI models loaded');
+      } catch (error) {
+        aiSpinner.fail('Failed to load AI models. Run "sortora setup" first.');
+        logger.error('AI error:', error);
+      }
+    }
+
     const spinner = ora('Scanning files...').start();
 
     try {
@@ -137,13 +150,32 @@ program
       }
 
       const analyzeSpinner = ora('Analyzing files...').start();
-      const analyzed = await analyzer.analyzeMany(files);
+      const analyzed = await analyzer.analyzeMany(files, { useAI: options.ai && analyzer.isAIEnabled() });
       analyzeSpinner.succeed('Analysis complete');
 
       if (options.json) {
         console.log(JSON.stringify(analyzed, null, 2));
       } else {
         renderScanStats(analyzed);
+
+        // Show file list with sizes
+        console.log(chalk.bold('\n  Files:\n'));
+        renderFileTable(analyzed);
+
+        // Show AI classifications if enabled
+        if (options.ai && analyzer.isAIEnabled()) {
+          console.log(chalk.bold('\n  AI Classifications:\n'));
+          for (const file of analyzed.slice(0, 10)) {
+            if (file.aiCategory) {
+              const confidence = Math.round((file.aiConfidence || 0) * 100);
+              console.log(chalk.dim(`    ${file.filename}`));
+              console.log(chalk.green(`      → ${file.aiCategory} (${confidence}%)\n`));
+            }
+          }
+          if (analyzed.length > 10) {
+            console.log(chalk.dim(`    ... and ${analyzed.length - 10} more files\n`));
+          }
+        }
 
         if (options.duplicates) {
           const duplicates = scanner.findDuplicates(analyzed);
@@ -167,9 +199,11 @@ program
 program
   .command('organize <path>')
   .description('Organize files based on rules')
+  .option('-d, --deep', 'Scan subdirectories recursively')
   .option('--dry-run', 'Show what would be done without making changes')
   .option('-i, --interactive', 'Confirm each action')
   .option('--auto', 'Apply actions automatically')
+  .option('--global', 'Move files to global destinations (~/Documents, ~/Pictures, etc.)')
   .option('--confidence <number>', 'Minimum confidence for auto mode (0-1)', '0.8')
   .action(async (targetPath, options) => {
     const fullPath = resolve(expandPath(targetPath));
@@ -179,7 +213,12 @@ program
       process.exit(1);
     }
 
-    console.log(chalk.bold(`\n  Organizing ${chalk.cyan(fullPath)}...\n`));
+    const modeText = options.global
+      ? chalk.yellow('(global mode - files will be moved to ~/Documents, etc.)')
+      : chalk.green('(local mode - files will be organized within the directory)');
+
+    console.log(chalk.bold(`\n  Organizing ${chalk.cyan(fullPath)}...`));
+    console.log(`  ${modeText}\n`);
 
     const config = loadConfig();
     const paths = getAppPaths();
@@ -193,7 +232,7 @@ program
     const executor = new Executor(db);
 
     const spinner = ora('Scanning files...').start();
-    const files = await scanner.scan(fullPath, { recursive: true });
+    const files = await scanner.scan(fullPath, { recursive: options.deep || false });
     spinner.succeed(`Found ${files.length} files`);
 
     if (files.length === 0) {
@@ -205,7 +244,11 @@ program
     const analyzed = await analyzer.analyzeMany(files);
     analyzeSpinner.succeed('Analysis complete');
 
-    const suggestions = suggester.generateSuggestions(analyzed);
+    // Generate suggestions with local or global destinations
+    const suggestions = suggester.generateSuggestions(analyzed, {
+      baseDir: fullPath,
+      useGlobalDestinations: options.global || false,
+    });
 
     if (suggestions.length === 0) {
       console.log(chalk.yellow('\n  No suggestions - files already organized.\n'));

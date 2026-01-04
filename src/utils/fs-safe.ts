@@ -190,10 +190,38 @@ export function getTrashPath(): string {
 
 export async function listDirectory(
   dirPath: string,
-  options: { recursive?: boolean; includeHidden?: boolean } = {}
+  options: { recursive?: boolean; includeHidden?: boolean; maxDepth?: number } = {},
+  currentDepth = 0,
+  visitedPaths = new Set<string>()
 ): Promise<string[]> {
-  const { recursive = false, includeHidden = false } = options;
-  const entries = await readdir(dirPath, { withFileTypes: true });
+  const { recursive = false, includeHidden = false, maxDepth = 10 } = options;
+
+  // Prevent infinite recursion
+  if (currentDepth > maxDepth) {
+    return [];
+  }
+
+  // Resolve real path to detect symlink loops
+  let realPath: string;
+  try {
+    const { realpath } = await import('fs/promises');
+    realPath = await realpath(dirPath);
+  } catch {
+    return [];
+  }
+
+  if (visitedPaths.has(realPath)) {
+    return []; // Already visited, skip to prevent loops
+  }
+  visitedPaths.add(realPath);
+
+  let entries;
+  try {
+    entries = await readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return []; // Permission denied or other error
+  }
+
   const files: string[] = [];
 
   for (const entry of entries) {
@@ -203,11 +231,20 @@ export async function listDirectory(
 
     const fullPath = join(dirPath, entry.name);
 
+    // Skip symlinks to avoid infinite loops
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
     if (entry.isFile()) {
       files.push(fullPath);
     } else if (entry.isDirectory() && recursive) {
-      const subFiles = await listDirectory(fullPath, options);
-      files.push(...subFiles);
+      try {
+        const subFiles = await listDirectory(fullPath, options, currentDepth + 1, visitedPaths);
+        files.push(...subFiles);
+      } catch {
+        // Skip directories that can't be read
+      }
     }
   }
 
@@ -216,10 +253,38 @@ export async function listDirectory(
 
 export function listDirectorySync(
   dirPath: string,
-  options: { recursive?: boolean; includeHidden?: boolean } = {}
+  options: { recursive?: boolean; includeHidden?: boolean; maxDepth?: number } = {},
+  currentDepth = 0,
+  visitedPaths = new Set<string>()
 ): string[] {
-  const { recursive = false, includeHidden = false } = options;
-  const entries = readdirSync(dirPath, { withFileTypes: true });
+  const { recursive = false, includeHidden = false, maxDepth = 10 } = options;
+
+  // Prevent infinite recursion
+  if (currentDepth > maxDepth) {
+    return [];
+  }
+
+  // Resolve real path to detect symlink loops
+  let realPath: string;
+  try {
+    const { realpathSync } = require('fs');
+    realPath = realpathSync(dirPath);
+  } catch {
+    return [];
+  }
+
+  if (visitedPaths.has(realPath)) {
+    return []; // Already visited, skip to prevent loops
+  }
+  visitedPaths.add(realPath);
+
+  let entries;
+  try {
+    entries = readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return []; // Permission denied or other error
+  }
+
   const files: string[] = [];
 
   for (const entry of entries) {
@@ -229,11 +294,20 @@ export function listDirectorySync(
 
     const fullPath = join(dirPath, entry.name);
 
+    // Skip symlinks to avoid infinite loops
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
     if (entry.isFile()) {
       files.push(fullPath);
     } else if (entry.isDirectory() && recursive) {
-      const subFiles = listDirectorySync(fullPath, options);
-      files.push(...subFiles);
+      try {
+        const subFiles = listDirectorySync(fullPath, options, currentDepth + 1, visitedPaths);
+        files.push(...subFiles);
+      } catch {
+        // Skip directories that can't be read
+      }
     }
   }
 

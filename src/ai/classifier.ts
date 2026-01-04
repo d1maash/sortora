@@ -1,17 +1,39 @@
 import { pipeline, type ZeroShotClassificationPipeline } from '@xenova/transformers';
 
 export const FILE_CATEGORIES = [
+  // Documents
   'work document',
   'personal document',
   'financial document',
+  'resume or CV',
+  'contract or legal',
+  'invoice or receipt',
+  'report or presentation',
+  'ebook or reading material',
+
+  // Media
   'photo or image',
   'screenshot',
-  'code or programming',
+  'meme or funny image',
+  'design or artwork',
   'music or audio',
   'video',
-  'archive or backup',
+  'podcast or recording',
+
+  // Technical
+  'code or programming',
+  'configuration file',
+  'database or data file',
+  'log file',
+
+  // Downloads
   'download or installer',
+  'archive or backup',
+  'torrent or incomplete',
+
+  // Other
   'temporary or junk',
+  'unknown or other',
 ] as const;
 
 export type FileCategory = typeof FILE_CATEGORIES[number];

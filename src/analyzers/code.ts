@@ -1,5 +1,5 @@
 import { readFile } from 'fs/promises';
-import { extname, basename } from 'path';
+import { extname } from 'path';
 
 export interface CodeMetadata {
   language?: string;
@@ -157,7 +157,7 @@ export async function analyzeCode(
   return { metadata, textContent };
 }
 
-function detectFramework(content: string, ext: string): string | undefined {
+function detectFramework(content: string, _ext: string): string | undefined {
   const frameworks: Record<string, RegExp[]> = {
     'React': [/from ['"]react['"]/, /import React/, /React\.Component/],
     'Vue': [/from ['"]vue['"]/, /createApp/, /defineComponent/],

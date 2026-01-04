@@ -70,6 +70,13 @@ export function interpolatePath(
   variables: Record<string, string | number | undefined>
 ): string {
   return template.replace(/\{([^}]+)\}/g, (match, key) => {
+    // First try flat key (e.g., "destinations.screenshots")
+    if (key in variables) {
+      const value = variables[key];
+      return value !== undefined ? String(value) : match;
+    }
+
+    // Then try nested access (e.g., variables.destinations.screenshots)
     const keys = key.split('.');
     let value: unknown = variables;
 

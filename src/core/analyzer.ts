@@ -3,6 +3,8 @@ import { basename, extname } from 'path';
 import { getMimeType, getFileCategory, type FileCategory } from '../utils/mime.js';
 import { hashFileQuick } from '../utils/file-hash.js';
 import { analyzeByType, type FileMetadata } from '../analyzers/index.js';
+import { EmbeddingService } from '../ai/embeddings.js';
+import { ClassifierService } from '../ai/classifier.js';
 import type { ScanResult } from './scanner.js';
 
 export interface FileAnalysis {
@@ -24,18 +26,35 @@ export interface FileAnalysis {
 }
 
 export class Analyzer {
+  private modelsDir: string;
   private aiEnabled = false;
+  private embeddingService: EmbeddingService | null = null;
+  private classifierService: ClassifierService | null = null;
 
-  constructor(_modelsDir: string) {
-    // modelsDir will be used when AI is fully implemented
+  constructor(modelsDir: string) {
+    this.modelsDir = modelsDir;
   }
 
   async enableAI(): Promise<void> {
-    // AI models would be initialized here
+    if (this.aiEnabled) return;
+
+    this.embeddingService = new EmbeddingService(this.modelsDir);
+    this.classifierService = new ClassifierService(this.modelsDir);
+
+    // Initialize both services
+    await Promise.all([
+      this.embeddingService.init(),
+      this.classifierService.init(),
+    ]);
+
     this.aiEnabled = true;
   }
 
-  async analyze(filePath: string): Promise<FileAnalysis> {
+  isAIEnabled(): boolean {
+    return this.aiEnabled;
+  }
+
+  async analyze(filePath: string, useAI = false): Promise<FileAnalysis> {
     const filename = basename(filePath);
     const ext = extname(filename).toLowerCase().slice(1);
     const mimeType = getMimeType(filename);
@@ -76,21 +95,46 @@ export class Analyzer {
       // Type-specific analysis failed
     }
 
+    // AI classification if enabled
+    if (useAI && this.aiEnabled && this.classifierService) {
+      try {
+        const aiResult = await this.classifierService.classifyFile({
+          filename: analysis.filename,
+          content: analysis.textContent,
+          metadata: analysis.metadata as Record<string, unknown> | undefined,
+        });
+        analysis.aiCategory = aiResult.category;
+        analysis.aiConfidence = aiResult.confidence;
+      } catch {
+        // AI classification failed
+      }
+    }
+
+    // Generate embedding if AI enabled
+    if (useAI && this.aiEnabled && this.embeddingService && analysis.textContent) {
+      try {
+        const text = `${analysis.filename} ${analysis.textContent.slice(0, 1000)}`;
+        analysis.embedding = await this.embeddingService.embed(text);
+      } catch {
+        // Embedding generation failed
+      }
+    }
+
     return analysis;
   }
 
   async analyzeMany(
     files: ScanResult[],
-    options: { parallel?: number } = {}
+    options: { parallel?: number; useAI?: boolean } = {}
   ): Promise<FileAnalysis[]> {
-    const { parallel = 5 } = options;
+    const { parallel = 5, useAI = false } = options;
     const results: FileAnalysis[] = [];
 
     // Process in batches for better performance
     for (let i = 0; i < files.length; i += parallel) {
       const batch = files.slice(i, i + parallel);
       const batchResults = await Promise.all(
-        batch.map(file => this.analyzeFromScanResult(file))
+        batch.map(file => this.analyzeFromScanResult(file, useAI))
       );
       results.push(...batchResults);
     }
@@ -98,7 +142,7 @@ export class Analyzer {
     return results;
   }
 
-  private async analyzeFromScanResult(scanResult: ScanResult): Promise<FileAnalysis> {
+  private async analyzeFromScanResult(scanResult: ScanResult, useAI = false): Promise<FileAnalysis> {
     const category = getFileCategory(scanResult.filename, scanResult.mimeType || undefined);
 
     const analysis: FileAnalysis = {
@@ -133,6 +177,21 @@ export class Analyzer {
       // Type-specific analysis failed
     }
 
+    // AI classification if enabled
+    if (useAI && this.aiEnabled && this.classifierService) {
+      try {
+        const aiResult = await this.classifierService.classifyFile({
+          filename: analysis.filename,
+          content: analysis.textContent,
+          metadata: analysis.metadata as Record<string, unknown> | undefined,
+        });
+        analysis.aiCategory = aiResult.category;
+        analysis.aiConfidence = aiResult.confidence;
+      } catch {
+        // AI classification failed
+      }
+    }
+
     return analysis;
   }
 
@@ -140,29 +199,67 @@ export class Analyzer {
     category: string;
     confidence: number;
   }> {
-    if (!this.aiEnabled) {
+    if (!this.aiEnabled || !this.classifierService) {
       return {
         category: analysis.category,
         confidence: 0.5,
       };
     }
 
-    // This would use the AI classifier
-    // For now, return basic classification
-    return {
-      category: analysis.category,
-      confidence: 0.7,
-    };
+    try {
+      return await this.classifierService.classifyFile({
+        filename: analysis.filename,
+        content: analysis.textContent,
+        metadata: analysis.metadata as Record<string, unknown> | undefined,
+      });
+    } catch {
+      return {
+        category: analysis.category,
+        confidence: 0.5,
+      };
+    }
   }
 
-  async getEmbedding(_analysis: FileAnalysis): Promise<number[] | null> {
-    if (!this.aiEnabled) {
+  async getEmbedding(analysis: FileAnalysis): Promise<number[] | null> {
+    if (!this.aiEnabled || !this.embeddingService) {
       return null;
     }
 
-    // This would generate embeddings using MiniLM
-    // For now, return null
-    return null;
+    try {
+      const text = `${analysis.filename} ${(analysis.textContent || '').slice(0, 1000)}`;
+      return await this.embeddingService.embed(text);
+    } catch {
+      return null;
+    }
+  }
+
+  async findSimilar(
+    analysis: FileAnalysis,
+    candidates: FileAnalysis[],
+    threshold = 0.7
+  ): Promise<{ file: FileAnalysis; similarity: number }[]> {
+    if (!this.aiEnabled || !this.embeddingService) {
+      return [];
+    }
+
+    const sourceEmbedding = analysis.embedding || await this.getEmbedding(analysis);
+    if (!sourceEmbedding) return [];
+
+    const results: { file: FileAnalysis; similarity: number }[] = [];
+
+    for (const candidate of candidates) {
+      if (candidate.path === analysis.path) continue;
+
+      const candidateEmbedding = candidate.embedding || await this.getEmbedding(candidate);
+      if (!candidateEmbedding) continue;
+
+      const similarity = this.embeddingService.cosineSimilarity(sourceEmbedding, candidateEmbedding);
+      if (similarity >= threshold) {
+        results.push({ file: candidate, similarity });
+      }
+    }
+
+    return results.sort((a, b) => b.similarity - a.similarity);
   }
 
   extractKeywords(analysis: FileAnalysis): string[] {

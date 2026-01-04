@@ -1,7 +1,8 @@
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { type Config, expandPath } from '../config.js';
 import type { FileAnalysis } from './analyzer.js';
 import { interpolatePath } from '../utils/paths.js';
+import { analyzeFilename } from '../utils/filename-analyzer.js';
 
 export interface Rule {
   name: string;
@@ -24,12 +25,19 @@ export interface Rule {
     delete?: boolean;
     confirm?: boolean;
   };
+  // Local destination for in-place organization
+  localDestination?: string;
 }
 
 export interface RuleMatch {
   rule: Rule;
   confidence: number;
   destination?: string;
+}
+
+export interface MatchOptions {
+  baseDir?: string;  // If set, organize within this directory
+  useGlobalDestinations?: boolean;  // Use global destinations like ~/Documents
 }
 
 export class RuleEngine {
@@ -46,11 +54,11 @@ export class RuleEngine {
     this.rules.sort((a, b) => b.priority - a.priority);
   }
 
-  match(file: FileAnalysis): RuleMatch | null {
+  match(file: FileAnalysis, options: MatchOptions = {}): RuleMatch | null {
     for (const rule of this.rules) {
       const match = this.matchRule(file, rule);
       if (match) {
-        const destination = this.resolveDestination(file, rule);
+        const destination = this.resolveDestination(file, rule, options);
         return {
           rule,
           confidence: match.confidence,
@@ -61,13 +69,13 @@ export class RuleEngine {
     return null;
   }
 
-  matchAll(file: FileAnalysis): RuleMatch[] {
+  matchAll(file: FileAnalysis, options: MatchOptions = {}): RuleMatch[] {
     const matches: RuleMatch[] = [];
 
     for (const rule of this.rules) {
       const match = this.matchRule(file, rule);
       if (match) {
-        const destination = this.resolveDestination(file, rule);
+        const destination = this.resolveDestination(file, rule, options);
         matches.push({
           rule,
           confidence: match.confidence,
@@ -96,7 +104,7 @@ export class RuleEngine {
       }
     }
 
-    // Filename pattern match
+    // Filename pattern match (required if specified)
     if (rule.match.filename && rule.match.filename.length > 0) {
       totalConditions++;
       const matched = rule.match.filename.some(pattern =>
@@ -104,6 +112,8 @@ export class RuleEngine {
       );
       if (matched) {
         matchCount++;
+      } else {
+        return null; // Filename pattern is required
       }
     }
 
@@ -224,10 +234,15 @@ export class RuleEngine {
     }
   }
 
-  private resolveDestination(file: FileAnalysis, rule: Rule): string | undefined {
-    const destTemplate = rule.action.moveTo || rule.action.suggestTo || rule.action.archiveTo;
+  private resolveDestination(
+    file: FileAnalysis,
+    rule: Rule,
+    options: MatchOptions = {}
+  ): string | undefined {
+    const { baseDir, useGlobalDestinations = false } = options;
 
-    if (!destTemplate) {
+    // For delete actions, no destination needed
+    if (rule.action.delete) {
       return undefined;
     }
 
@@ -243,11 +258,6 @@ export class RuleEngine {
       extension: file.extension,
       category: file.category,
     };
-
-    // Add destinations from config
-    for (const [key, value] of Object.entries(this.config.destinations)) {
-      variables[`destinations.${key}`] = value;
-    }
 
     // Add metadata variables
     if (file.metadata) {
@@ -266,11 +276,159 @@ export class RuleEngine {
       }
     }
 
+    // LOCAL ORGANIZATION: organize within the specified directory
+    if (baseDir && !useGlobalDestinations) {
+      const localDest = this.getLocalDestination(file, rule, variables);
+      if (localDest) {
+        return join(baseDir, localDest);
+      }
+      return undefined;
+    }
+
+    // GLOBAL ORGANIZATION: use configured destinations
+    const destTemplate = rule.action.moveTo || rule.action.suggestTo || rule.action.archiveTo;
+    if (!destTemplate) {
+      return undefined;
+    }
+
+    // Add global destinations from config
+    for (const [key, value] of Object.entries(this.config.destinations)) {
+      variables[`destinations.${key}`] = value;
+    }
+
     // Interpolate and expand path
     let result = interpolatePath(destTemplate, variables);
     result = expandPath(result);
 
     return result;
+  }
+
+  private getLocalDestination(
+    file: FileAnalysis,
+    rule: Rule,
+    variables: Record<string, string | number>
+  ): string | undefined {
+    // Use rule's localDestination if defined
+    if (rule.localDestination) {
+      return interpolatePath(rule.localDestination, variables);
+    }
+
+    // Use smart filename analysis for documents
+    const category = file.category;
+    const ruleName = rule.name.toLowerCase();
+
+    // For documents, use smart filename analysis
+    if (category === 'document' || ['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'].includes(file.extension)) {
+      const filenameAnalysis = analyzeFilename(file.filename);
+
+      // Use the smart suggested folder from filename analysis
+      if (filenameAnalysis.suggestedFolder && filenameAnalysis.suggestedFolder !== 'Documents') {
+        return filenameAnalysis.suggestedFolder;
+      }
+    }
+
+    // For photos with EXIF, organize by date
+    if ((ruleName.includes('photo') || category === 'image') && file.metadata) {
+      const meta = file.metadata as Record<string, unknown>;
+      if (meta.dateTaken instanceof Date) {
+        return interpolatePath('Photos/{exif.year}/{exif.month}', variables);
+      }
+    }
+
+    // For screenshots, use smart analysis
+    if (ruleName.includes('screenshot')) {
+      const filenameAnalysis = analyzeFilename(file.filename);
+      if (filenameAnalysis.year) {
+        const month = filenameAnalysis.month?.toString().padStart(2, '0') || variables.month;
+        return `Screenshots/${filenameAnalysis.year}-${month}`;
+      }
+      return interpolatePath('Screenshots/{year}-{month}', variables);
+    }
+
+    // For music with metadata
+    if (ruleName.includes('music') || ruleName.includes('audio') || category === 'audio') {
+      const artist = variables['audio.artist'];
+      const album = variables['audio.album'];
+      if (artist && album) {
+        return `Music/${artist}/${album}`;
+      }
+      if (artist) {
+        return `Music/${artist}`;
+      }
+      return 'Music/Unsorted';
+    }
+
+    // For videos
+    if (category === 'video') {
+      return interpolatePath('Videos/{year}', variables);
+    }
+
+    // For archives
+    if (category === 'archive') {
+      // Try to detect what's in the archive by name
+      const filenameAnalysis = analyzeFilename(file.filename);
+      if (filenameAnalysis.entity) {
+        return `Archives/${filenameAnalysis.entity}`;
+      }
+      return 'Archives';
+    }
+
+    // For code files - use smart analysis
+    if (category === 'code') {
+      const filenameAnalysis = analyzeFilename(file.filename);
+      if (filenameAnalysis.language) {
+        return filenameAnalysis.suggestedFolder;
+      }
+      return 'Code';
+    }
+
+    // For executables/installers
+    if (category === 'executable' || ruleName.includes('installer')) {
+      return 'Installers';
+    }
+
+    // E-books
+    if (ruleName.includes('ebook') || ruleName.includes('book')) {
+      return 'Books';
+    }
+
+    // Fonts
+    if (ruleName.includes('font')) {
+      return 'Fonts';
+    }
+
+    // Design files
+    if (ruleName.includes('design')) {
+      return 'Design';
+    }
+
+    // Torrents
+    if (ruleName.includes('torrent')) {
+      return 'Torrents';
+    }
+
+    // Logs
+    if (ruleName.includes('log')) {
+      return 'Logs';
+    }
+
+    // For other images
+    if (category === 'image') {
+      return interpolatePath('Images/{year}', variables);
+    }
+
+    // Data files
+    if (category === 'data') {
+      return 'Data';
+    }
+
+    // Default fallback - try smart analysis
+    const filenameAnalysis = analyzeFilename(file.filename);
+    if (filenameAnalysis.suggestedFolder !== 'Other') {
+      return filenameAnalysis.suggestedFolder;
+    }
+
+    return 'Other';
   }
 
   private getFileYear(file: FileAnalysis): number | null {
@@ -305,28 +463,153 @@ export class RuleEngine {
 
   private getDefaultRules(): Rule[] {
     return [
+      // Screenshots - highest priority for specific filename patterns
       {
         name: 'Screenshots',
         priority: 100,
         match: {
-          extension: ['png', 'jpg'],
-          filename: ['Screenshot*', 'Снимок*', 'Screen Shot*', 'Capture*'],
+          extension: ['png', 'jpg', 'jpeg'],
+          filename: ['Screenshot*', 'Снимок*', 'Screen Shot*', 'Capture*', 'Снимок экрана*'],
         },
         action: {
           moveTo: '{destinations.screenshots}/{year}-{month}/',
         },
       },
+
+      // Photos with EXIF
       {
         name: 'Photos with EXIF',
         priority: 90,
         match: {
-          extension: ['jpg', 'jpeg', 'heic', 'raw', 'cr2', 'nef', 'arw', 'dng'],
+          extension: ['jpg', 'jpeg', 'heic', 'heif', 'raw', 'cr2', 'nef', 'arw', 'dng'],
           hasExif: true,
         },
         action: {
           moveTo: '{destinations.photos}/{exif.year}/{exif.month}/',
         },
       },
+
+      // Design files
+      {
+        name: 'Design files',
+        priority: 85,
+        match: {
+          extension: ['psd', 'ai', 'sketch', 'fig', 'xd', 'svg'],
+        },
+        action: {
+          suggestTo: '{destinations.photos}/Design/',
+        },
+      },
+
+      // Code - React/Vue/Svelte components
+      {
+        name: 'Frontend components',
+        priority: 75,
+        match: {
+          extension: ['jsx', 'tsx', 'vue', 'svelte'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Components/',
+        },
+      },
+
+      // Code - Config files
+      {
+        name: 'Config files',
+        priority: 80,
+        match: {
+          extension: ['json', 'yaml', 'yml', 'toml', 'ini', 'env'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Config/',
+        },
+      },
+
+      // Code - JavaScript/TypeScript
+      {
+        name: 'JavaScript/TypeScript',
+        priority: 70,
+        match: {
+          extension: ['js', 'ts', 'mjs', 'cjs'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/JavaScript/',
+        },
+      },
+
+      // Code - Python
+      {
+        name: 'Python scripts',
+        priority: 70,
+        match: {
+          extension: ['py', 'pyw', 'ipynb'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Python/',
+        },
+      },
+
+      // Code - Go
+      {
+        name: 'Go files',
+        priority: 70,
+        match: {
+          extension: ['go'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Go/',
+        },
+      },
+
+      // Code - SQL/Database
+      {
+        name: 'Database files',
+        priority: 75,
+        match: {
+          extension: ['sql'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Database/',
+        },
+      },
+
+      // Code - Stylesheets
+      {
+        name: 'Stylesheets',
+        priority: 70,
+        match: {
+          extension: ['css', 'scss', 'sass', 'less', 'styl'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Styles/',
+        },
+      },
+
+      // Code - Shell scripts
+      {
+        name: 'Shell scripts',
+        priority: 70,
+        match: {
+          extension: ['sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Scripts/',
+        },
+      },
+
+      // Code - Other languages
+      {
+        name: 'Code files',
+        priority: 60,
+        match: {
+          type: 'code',
+        },
+        action: {
+          suggestTo: '{destinations.code}/',
+        },
+      },
+
+      // Other images
       {
         name: 'Other images',
         priority: 80,
@@ -337,6 +620,59 @@ export class RuleEngine {
           suggestTo: '{destinations.photos}/Unsorted/',
         },
       },
+
+      // Resumes and CVs
+      {
+        name: 'Resumes',
+        priority: 95,
+        match: {
+          extension: ['pdf', 'docx', 'doc'],
+          filename: ['*resume*', '*cv*', '*Resume*', '*CV*', '*резюме*', '*Резюме*'],
+        },
+        action: {
+          moveTo: '{destinations.documents}/Resumes/',
+        },
+      },
+
+      // Invoices and receipts
+      {
+        name: 'Invoices',
+        priority: 90,
+        match: {
+          extension: ['pdf'],
+          filename: ['*invoice*', '*receipt*', '*счёт*', '*чек*', '*Invoice*', '*Receipt*'],
+        },
+        action: {
+          moveTo: '{destinations.finance}/Invoices/{year}/',
+        },
+      },
+
+      // Contracts
+      {
+        name: 'Contracts',
+        priority: 90,
+        match: {
+          extension: ['pdf', 'docx', 'doc'],
+          filename: ['*contract*', '*agreement*', '*договор*', '*Contract*', '*Agreement*', '*Договор*'],
+        },
+        action: {
+          moveTo: '{destinations.documents}/Contracts/{year}/',
+        },
+      },
+
+      // E-books
+      {
+        name: 'E-books',
+        priority: 85,
+        match: {
+          extension: ['epub', 'mobi', 'azw', 'azw3', 'fb2', 'djvu'],
+        },
+        action: {
+          moveTo: '{destinations.documents}/Books/',
+        },
+      },
+
+      // PDF documents
       {
         name: 'PDF documents',
         priority: 70,
@@ -347,51 +683,146 @@ export class RuleEngine {
           suggestTo: '{destinations.documents}/{year}/',
         },
       },
+
+      // Spreadsheets
+      {
+        name: 'Spreadsheets',
+        priority: 75,
+        match: {
+          extension: ['xlsx', 'xls', 'csv', 'numbers', 'ods'],
+        },
+        action: {
+          suggestTo: '{destinations.documents}/Spreadsheets/{year}/',
+        },
+      },
+
+      // Presentations
+      {
+        name: 'Presentations',
+        priority: 75,
+        match: {
+          extension: ['pptx', 'ppt', 'key', 'odp'],
+        },
+        action: {
+          suggestTo: '{destinations.documents}/Presentations/{year}/',
+        },
+      },
+
+      // Office documents
       {
         name: 'Office documents',
         priority: 70,
         match: {
-          extension: ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'],
+          extension: ['docx', 'doc', 'odt', 'rtf', 'pages'],
         },
         action: {
           suggestTo: '{destinations.documents}/{year}/',
         },
       },
+
+      // Text files
+      {
+        name: 'Text files',
+        priority: 65,
+        match: {
+          extension: ['txt', 'md', 'markdown', 'rst'],
+        },
+        action: {
+          suggestTo: '{destinations.documents}/Notes/',
+        },
+      },
+
+      // Music files
       {
         name: 'Music files',
         priority: 85,
         match: {
-          extension: ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a'],
+          extension: ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'wma', 'alac'],
         },
         action: {
           moveTo: '{destinations.music}/{audio.artist}/{audio.album}/',
         },
       },
+
+      // Video files
       {
         name: 'Video files',
         priority: 85,
         match: {
-          extension: ['mp4', 'mkv', 'avi', 'mov', 'webm'],
+          extension: ['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv', 'flv', 'm4v', '3gp'],
         },
         action: {
           suggestTo: '{destinations.video}/{year}/',
         },
       },
+
+      // Code projects
+      {
+        name: 'Code archives',
+        priority: 80,
+        match: {
+          extension: ['zip', 'tar', 'gz'],
+          filename: ['*-main.zip', '*-master.zip', '*-src*', '*source*'],
+        },
+        action: {
+          suggestTo: '{destinations.code}/Archives/',
+        },
+      },
+
+      // Archives
       {
         name: 'Archives',
         priority: 75,
         match: {
-          extension: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'],
+          extension: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'],
         },
         action: {
           suggestTo: '{destinations.archives}/',
         },
       },
+
+      // Torrent files
+      {
+        name: 'Torrents',
+        priority: 90,
+        match: {
+          extension: ['torrent'],
+        },
+        action: {
+          suggestTo: '{destinations.archives}/Torrents/',
+        },
+      },
+
+      // Font files
+      {
+        name: 'Fonts',
+        priority: 85,
+        match: {
+          extension: ['ttf', 'otf', 'woff', 'woff2', 'eot'],
+        },
+        action: {
+          suggestTo: '{destinations.documents}/Fonts/',
+        },
+      },
+
+      // Disk images and installers
+      {
+        name: 'Disk images',
+        priority: 70,
+        match: {
+          extension: ['iso', 'img', 'dmg'],
+        },
+        action: {
+          suggestTo: '{destinations.archives}/Disk Images/',
+        },
+      },
+
+      // Old installers - suggest deletion
       {
         name: 'Old installers',
         priority: 100,
         match: {
-          extension: ['dmg', 'pkg', 'exe', 'msi'],
+          extension: ['dmg', 'pkg', 'exe', 'msi', 'deb', 'rpm', 'appimage'],
           age: '> 30 days',
         },
         action: {
@@ -399,11 +830,75 @@ export class RuleEngine {
           confirm: true,
         },
       },
+
+      // Incomplete downloads
+      {
+        name: 'Incomplete downloads',
+        priority: 100,
+        match: {
+          extension: ['crdownload', 'part', 'partial', 'download'],
+        },
+        action: {
+          delete: true,
+          confirm: true,
+        },
+      },
+
+      // Temporary files
       {
         name: 'Temporary files',
         priority: 100,
         match: {
-          extension: ['tmp', 'temp', 'bak', 'swp'],
+          extension: ['tmp', 'temp', 'bak', 'swp', 'swo', 'swn'],
+        },
+        action: {
+          delete: true,
+        },
+      },
+
+      // Office temp/lock files
+      {
+        name: 'Office lock files',
+        priority: 100,
+        match: {
+          filename: ['~$*'],
+        },
+        action: {
+          delete: true,
+          confirm: true,
+        },
+      },
+
+      // Log files
+      {
+        name: 'Log files',
+        priority: 60,
+        match: {
+          extension: ['log'],
+        },
+        action: {
+          suggestTo: '{destinations.archives}/Logs/',
+        },
+      },
+
+      // macOS metadata files
+      {
+        name: 'macOS junk',
+        priority: 100,
+        match: {
+          filename: ['.DS_Store', '._*', '.Spotlight*', '.Trashes'],
+        },
+        action: {
+          delete: true,
+        },
+      },
+
+      // Windows junk
+      {
+        name: 'Windows junk',
+        priority: 100,
+        match: {
+          filename: ['Thumbs.db', 'desktop.ini', '*.lnk'],
         },
         action: {
           delete: true,

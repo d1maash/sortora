@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { RuleEngine, type RuleMatch } from './rule-engine.js';
+import { RuleEngine, type RuleMatch, type MatchOptions } from './rule-engine.js';
 import type { FileAnalysis } from './analyzer.js';
 import type { Config } from '../config.js';
 
@@ -12,6 +12,11 @@ export interface Suggestion {
   requiresConfirmation: boolean;
 }
 
+export interface SuggestionOptions {
+  baseDir?: string;           // Organize within this directory
+  useGlobalDestinations?: boolean;  // Use global destinations like ~/Documents
+}
+
 export class Suggester {
   private ruleEngine: RuleEngine;
 
@@ -19,8 +24,13 @@ export class Suggester {
     this.ruleEngine = ruleEngine;
   }
 
-  generateSuggestion(file: FileAnalysis): Suggestion | null {
-    const match = this.ruleEngine.match(file);
+  generateSuggestion(file: FileAnalysis, options: SuggestionOptions = {}): Suggestion | null {
+    const matchOptions: MatchOptions = {
+      baseDir: options.baseDir,
+      useGlobalDestinations: options.useGlobalDestinations,
+    };
+
+    const match = this.ruleEngine.match(file, matchOptions);
 
     if (!match) {
       return null;
@@ -29,11 +39,11 @@ export class Suggester {
     return this.matchToSuggestion(file, match);
   }
 
-  generateSuggestions(files: FileAnalysis[]): Suggestion[] {
+  generateSuggestions(files: FileAnalysis[], options: SuggestionOptions = {}): Suggestion[] {
     const suggestions: Suggestion[] = [];
 
     for (const file of files) {
-      const suggestion = this.generateSuggestion(file);
+      const suggestion = this.generateSuggestion(file, options);
       if (suggestion) {
         suggestions.push(suggestion);
       }

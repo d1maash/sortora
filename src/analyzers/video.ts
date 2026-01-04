@@ -20,9 +20,8 @@ export async function analyzeVideo(filePath: string): Promise<VideoMetadata> {
     // Basic file analysis
     const fileStats = await stat(filePath);
 
-    // Estimate based on file size and common video characteristics
-    // Real implementation would use ffprobe or similar
-    const sizeMB = fileStats.size / (1024 * 1024);
+    // Note: For real implementation, would use ffprobe to get detailed metadata
+    void fileStats.size; // File size available for future bitrate estimation
 
     // Try to extract year from filename
     const yearMatch = filePath.match(/[(\[.]?(19|20)\d{2}[)\].]?/);
