@@ -1,6 +1,6 @@
 {
     "name": "sortora",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Smart offline file organizer with AI-powered classification. Organize documents, code, and media files intelligently.",
     "type": "module",
     "bin": {
