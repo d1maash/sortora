@@ -1,0 +1,25 @@
+# Source files
+src/
+tsconfig.json
+tsup.config.ts
+
+# Development
+.github/
+.vscode/
+.idea/
+
+# Tests
+tests/
+**/*.test.ts
+**/*.spec.ts
+vitest.config.ts
+coverage/
+
+# Docs (included in README)
+docs/
+
+# Other
+*.log
+.DS_Store
+Thumbs.db
+*.tgz
