@@ -1,6 +1,6 @@
 {
   "name": "sortora",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Smart offline file organizer with AI-powered classification. Organize documents, code, and media files intelligently.",
   "type": "module",
   "bin": {
@@ -87,10 +87,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dimashpt/sortora.git"
+    "url": "git+https://github.com/d1maash/sortora.git"
   },
-  "homepage": "https://github.com/dimashpt/sortora#readme",
+  "homepage": "https://github.com/d1maash/sortora#readme",
   "bugs": {
-    "url": "https://github.com/dimashpt/sortora/issues"
+    "url": "https://github.com/d1maash/sortora/issues"
   }
 }
