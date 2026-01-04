@@ -40,12 +40,12 @@ sortora organize ~/Downloads --dry-run
 **Before:**
 ```
 ~/Downloads/
-├── Договор ООО Ромашка 2025.pdf
-├── Invoice_Acme_Corp_January_2025.pdf
+├── Contract_Acme_Inc_2025.pdf
+├── Invoice_GlobalTech_January_2025.pdf
 ├── John-Smith-Resume.docx
 ├── react-components.tsx
 ├── api-server.py
-├── Снимок экрана 2025-01-15.png
+├── Screenshot_2025-01-15.png
 └── ... 50 more files
 ```
 
@@ -53,13 +53,13 @@ sortora organize ~/Downloads --dry-run
 ```
 ~/Downloads/
 ├── Contracts/
-│   └── Ромашка/
+│   └── Acme Inc/
 │       └── 2025/
-│           └── Договор ООО Ромашка 2025.pdf
+│           └── Contract_Acme_Inc_2025.pdf
 ├── Finance/
 │   └── Invoices/
-│       └── Acme Corp/
-│           └── Invoice_Acme_Corp_January_2025.pdf
+│       └── GlobalTech/
+│           └── Invoice_GlobalTech_January_2025.pdf
 ├── Documents/
 │   └── Resumes/
 │       └── John Smith/
@@ -72,13 +72,13 @@ sortora organize ~/Downloads --dry-run
 │       └── api-server.py
 └── Screenshots/
     └── 2025-01/
-        └── Снимок экрана 2025-01-15.png
+        └── Screenshot_2025-01-15.png
 ```
 
 ## Features
 
 ### Smart Filename Analysis
-- **Extracts company names**: `Договор ООО Ромашка` → `Contracts/Ромашка/`
+- **Extracts company names**: `Contract_Acme_Inc.pdf` → `Contracts/Acme Inc/`
 - **Extracts person names**: `John-Smith-Resume.pdf` → `Resumes/John Smith/`
 - **Detects document types**: contracts, invoices, resumes, reports
 - **Recognizes dates**: organizes by year/month from filename
@@ -245,7 +245,7 @@ destinations:
 | Smart filename analysis | Yes | Basic patterns |
 | AI classification | Yes (optional) | Rarely |
 | Code file support | Yes | No |
-| Multi-language filenames | Yes (RU, EN) | Often EN only |
+| Multi-language filenames | Yes | Often EN only |
 | Undo support | Yes | Rarely |
 | Open source | Yes | Often paid |
 
@@ -255,7 +255,7 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/sortora.git
+git clone https://github.com/d1maash/sortora.git
 
 # Install dependencies
 npm install

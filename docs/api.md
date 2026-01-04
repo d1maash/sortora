@@ -373,5 +373,5 @@ import type {
 
 ## Next Steps
 
-- [Examples](https://github.com/yourusername/sortora/tree/main/examples)
+- [Examples](https://github.com/d1maash/sortora/tree/main/examples)
 - [Contributing](../CONTRIBUTING.md)

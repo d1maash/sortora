@@ -15,11 +15,11 @@ Sortora comes with sensible default rules:
 
 | Rule | Priority | Matches | Action |
 |------|----------|---------|--------|
-| Screenshots | 100 | `Screenshot*.png`, `Снимок*.png` | Move to Screenshots |
+| Screenshots | 100 | `Screenshot*.png` | Move to Screenshots |
 | Photos with EXIF | 90 | HEIC, RAW with EXIF data | Move to Photos by date |
 | Resumes | 95 | `*resume*.pdf`, `*cv*.docx` | Move to Resumes |
-| Contracts | 90 | `*договор*.pdf`, `*contract*` | Move to Contracts |
-| Invoices | 90 | `*invoice*.pdf`, `*счёт*` | Move to Finance |
+| Contracts | 90 | `*contract*.pdf`, `*agreement*` | Move to Contracts |
+| Invoices | 90 | `*invoice*.pdf`, `*receipt*` | Move to Finance |
 | Frontend components | 75 | `.jsx`, `.tsx`, `.vue`, `.svelte` | Move to Code/Components |
 | Config files | 80 | `.json`, `.yaml`, `.toml` | Move to Code/Config |
 | Old installers | 100 | `.dmg`, `.exe` older than 30 days | Suggest delete |
@@ -66,7 +66,7 @@ match:
   filename:
     - "Invoice*"
     - "*_report_*"
-    - "Договор*"
+    - "Contract*"
 ```
 
 ### type
