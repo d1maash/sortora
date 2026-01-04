@@ -24,11 +24,10 @@ export interface FileAnalysis {
 }
 
 export class Analyzer {
-  private modelsDir: string;
   private aiEnabled = false;
 
-  constructor(modelsDir: string) {
-    this.modelsDir = modelsDir;
+  constructor(_modelsDir: string) {
+    // modelsDir will be used when AI is fully implemented
   }
 
   async enableAI(): Promise<void> {
@@ -156,7 +155,7 @@ export class Analyzer {
     };
   }
 
-  async getEmbedding(analysis: FileAnalysis): Promise<number[] | null> {
+  async getEmbedding(_analysis: FileAnalysis): Promise<number[] | null> {
     if (!this.aiEnabled) {
       return null;
     }

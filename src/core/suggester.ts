@@ -1,4 +1,4 @@
-import { join, basename } from 'path';
+import { join } from 'path';
 import { RuleEngine, type RuleMatch } from './rule-engine.js';
 import type { FileAnalysis } from './analyzer.js';
 import type { Config } from '../config.js';
@@ -14,11 +14,9 @@ export interface Suggestion {
 
 export class Suggester {
   private ruleEngine: RuleEngine;
-  private config: Config;
 
-  constructor(ruleEngine: RuleEngine, config: Config) {
+  constructor(ruleEngine: RuleEngine, _config: Config) {
     this.ruleEngine = ruleEngine;
-    this.config = config;
   }
 
   generateSuggestion(file: FileAnalysis): Suggestion | null {

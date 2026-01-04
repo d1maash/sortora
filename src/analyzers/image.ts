@@ -1,5 +1,4 @@
 import sharp from 'sharp';
-import { readFile } from 'fs/promises';
 import exifReader from 'exif-reader';
 
 export interface ImageMetadata {

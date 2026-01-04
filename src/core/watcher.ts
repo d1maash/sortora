@@ -1,14 +1,11 @@
 import { EventEmitter } from 'events';
 import chokidar, { FSWatcher } from 'chokidar';
-import { basename, extname } from 'path';
-import { stat } from 'fs/promises';
 import { Database } from '../storage/database.js';
 import { Analyzer, type FileAnalysis } from './analyzer.js';
 import { RuleEngine } from './rule-engine.js';
 import { Suggester } from './suggester.js';
 import { Executor } from './executor.js';
 import type { Config } from '../config.js';
-import { getMimeType, getFileCategory } from '../utils/mime.js';
 
 export interface WatcherOptions {
   auto?: boolean;
@@ -25,9 +22,7 @@ export interface WatcherEvents {
 }
 
 export class Watcher extends EventEmitter {
-  private db: Database;
   private config: Config;
-  private modelsDir: string;
   private watcher: FSWatcher | null = null;
   private analyzer: Analyzer;
   private ruleEngine: RuleEngine;
@@ -38,9 +33,7 @@ export class Watcher extends EventEmitter {
 
   constructor(db: Database, config: Config, modelsDir: string) {
     super();
-    this.db = db;
     this.config = config;
-    this.modelsDir = modelsDir;
     this.analyzer = new Analyzer(modelsDir);
     this.ruleEngine = new RuleEngine(config);
     this.suggester = new Suggester(this.ruleEngine, config);

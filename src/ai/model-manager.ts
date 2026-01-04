@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
 import { EmbeddingService } from './embeddings.js';
 import { ClassifierService } from './classifier.js';
 import { OCRService } from './ocr.js';

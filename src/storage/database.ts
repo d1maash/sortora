@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import initSqlJs, { type Database as SqlJsDatabase, type SqlValue } from 'sql.js';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { dirname } from 'path';
 import { ensureDirSync } from '../utils/fs-safe.js';
 import { runMigrations } from './migrations.js';
@@ -15,7 +16,7 @@ export interface FileRecord {
   modifiedAt: number;
   accessedAt: number;
   metadataJson: string | null;
-  embedding: Buffer | null;
+  embedding: Uint8Array | null;
   category: string | null;
   categoryConfidence: number | null;
   ocrText: string | null;
@@ -43,24 +44,114 @@ export interface PatternRecord {
   createdAt: number;
 }
 
+let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+
+async function getSql() {
+  if (!SQL) {
+    SQL = await initSqlJs();
+  }
+  return SQL;
+}
+
 export class Database {
-  private db: Database.Database;
+  private db: SqlJsDatabase | null = null;
   private dbPath: string;
+  private saveTimer: NodeJS.Timeout | null = null;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
     ensureDirSync(dirname(dbPath));
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
   }
 
   async init(): Promise<void> {
+    const SqlJs = await getSql();
+
+    if (existsSync(this.dbPath)) {
+      const buffer = readFileSync(this.dbPath);
+      this.db = new SqlJs.Database(buffer);
+    } else {
+      this.db = new SqlJs.Database();
+    }
+
+    this.db.run('PRAGMA foreign_keys = ON');
     runMigrations(this.db);
+    this.save();
+  }
+
+  private save(): void {
+    // Debounce saves
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+    this.saveTimer = setTimeout(() => {
+      this.saveNow();
+    }, 100);
+  }
+
+  private saveNow(): void {
+    if (this.db) {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      writeFileSync(this.dbPath, buffer);
+    }
   }
 
   close(): void {
-    this.db.close();
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+    this.saveNow();
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
+  }
+
+  private ensureDb(): SqlJsDatabase {
+    if (!this.db) {
+      throw new Error('Database not initialized. Call init() first.');
+    }
+    return this.db;
+  }
+
+  private queryOne<T>(sql: string, params: SqlValue[] = []): T | null {
+    const db = this.ensureDb();
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+
+    if (stmt.step()) {
+      const row = stmt.getAsObject() as T;
+      stmt.free();
+      return row;
+    }
+    stmt.free();
+    return null;
+  }
+
+  private queryAll<T>(sql: string, params: SqlValue[] = []): T[] {
+    const db = this.ensureDb();
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+
+    const results: T[] = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject() as T);
+    }
+    stmt.free();
+    return results;
+  }
+
+  private run(sql: string, params: SqlValue[] = []): number {
+    const db = this.ensureDb();
+    db.run(sql, params);
+    this.save();
+
+    // Get last insert rowid
+    const result = db.exec('SELECT last_insert_rowid() as id');
+    if (result.length > 0 && result[0].values.length > 0) {
+      return result[0].values[0][0] as number;
+    }
+    return 0;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -68,84 +159,96 @@ export class Database {
   // ═══════════════════════════════════════════════════════════════
 
   insertFile(file: Omit<FileRecord, 'id'>): number {
-    const stmt = this.db.prepare(`
+    return this.run(`
       INSERT OR REPLACE INTO files (
         path, filename, extension, mime_type, size, hash,
         created_at, modified_at, accessed_at,
         metadata_json, embedding, category, category_confidence,
         ocr_text, analyzed_at
-      ) VALUES (
-        @path, @filename, @extension, @mimeType, @size, @hash,
-        @createdAt, @modifiedAt, @accessedAt,
-        @metadataJson, @embedding, @category, @categoryConfidence,
-        @ocrText, @analyzedAt
-      )
-    `);
-
-    const result = stmt.run({
-      path: file.path,
-      filename: file.filename,
-      extension: file.extension,
-      mimeType: file.mimeType,
-      size: file.size,
-      hash: file.hash,
-      createdAt: file.createdAt,
-      modifiedAt: file.modifiedAt,
-      accessedAt: file.accessedAt,
-      metadataJson: file.metadataJson,
-      embedding: file.embedding,
-      category: file.category,
-      categoryConfidence: file.categoryConfidence,
-      ocrText: file.ocrText,
-      analyzedAt: file.analyzedAt,
-    });
-
-    return result.lastInsertRowid as number;
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      file.path,
+      file.filename,
+      file.extension,
+      file.mimeType,
+      file.size,
+      file.hash,
+      file.createdAt,
+      file.modifiedAt,
+      file.accessedAt,
+      file.metadataJson,
+      file.embedding,
+      file.category,
+      file.categoryConfidence,
+      file.ocrText,
+      file.analyzedAt,
+    ]);
   }
 
   getFile(path: string): FileRecord | null {
-    const stmt = this.db.prepare(`
+    const row = this.queryOne<Record<string, unknown>>(`
       SELECT
-        id, path, filename, extension, mime_type as mimeType, size, hash,
-        created_at as createdAt, modified_at as modifiedAt, accessed_at as accessedAt,
-        metadata_json as metadataJson, embedding, category, category_confidence as categoryConfidence,
-        ocr_text as ocrText, analyzed_at as analyzedAt
+        id, path, filename, extension, mime_type, size, hash,
+        created_at, modified_at, accessed_at,
+        metadata_json, embedding, category, category_confidence,
+        ocr_text, analyzed_at
       FROM files WHERE path = ?
-    `);
-    return stmt.get(path) as FileRecord | null;
+    `, [path]);
+
+    if (!row) return null;
+    return this.mapFileRecord(row);
   }
 
   getFileByHash(hash: string): FileRecord[] {
-    const stmt = this.db.prepare(`
+    const rows = this.queryAll<Record<string, unknown>>(`
       SELECT
-        id, path, filename, extension, mime_type as mimeType, size, hash,
-        created_at as createdAt, modified_at as modifiedAt, accessed_at as accessedAt,
-        metadata_json as metadataJson, embedding, category, category_confidence as categoryConfidence,
-        ocr_text as ocrText, analyzed_at as analyzedAt
+        id, path, filename, extension, mime_type, size, hash,
+        created_at, modified_at, accessed_at,
+        metadata_json, embedding, category, category_confidence,
+        ocr_text, analyzed_at
       FROM files WHERE hash = ?
-    `);
-    return stmt.all(hash) as FileRecord[];
+    `, [hash]);
+
+    return rows.map(row => this.mapFileRecord(row));
+  }
+
+  private mapFileRecord(row: Record<string, unknown>): FileRecord {
+    return {
+      id: row.id as number,
+      path: row.path as string,
+      filename: row.filename as string,
+      extension: row.extension as string | null,
+      mimeType: row.mime_type as string | null,
+      size: row.size as number,
+      hash: row.hash as string | null,
+      createdAt: row.created_at as number,
+      modifiedAt: row.modified_at as number,
+      accessedAt: row.accessed_at as number,
+      metadataJson: row.metadata_json as string | null,
+      embedding: row.embedding as Uint8Array | null,
+      category: row.category as string | null,
+      categoryConfidence: row.category_confidence as number | null,
+      ocrText: row.ocr_text as string | null,
+      analyzedAt: row.analyzed_at as number,
+    };
   }
 
   deleteFile(path: string): void {
-    const stmt = this.db.prepare('DELETE FROM files WHERE path = ?');
-    stmt.run(path);
+    this.run('DELETE FROM files WHERE path = ?', [path]);
   }
 
   updateFilePath(oldPath: string, newPath: string): void {
-    const stmt = this.db.prepare('UPDATE files SET path = ? WHERE path = ?');
-    stmt.run(newPath, oldPath);
+    this.run('UPDATE files SET path = ? WHERE path = ?', [newPath, oldPath]);
   }
 
   getAllHashes(): { hash: string; count: number }[] {
-    const stmt = this.db.prepare(`
+    return this.queryAll<{ hash: string; count: number }>(`
       SELECT hash, COUNT(*) as count
       FROM files
       WHERE hash IS NOT NULL
       GROUP BY hash
       HAVING count > 1
     `);
-    return stmt.all() as { hash: string; count: number }[];
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -153,49 +256,60 @@ export class Database {
   // ═══════════════════════════════════════════════════════════════
 
   insertOperation(op: Omit<OperationRecord, 'id' | 'createdAt' | 'undoneAt'>): number {
-    const stmt = this.db.prepare(`
+    return this.run(`
       INSERT INTO operations (type, source, destination, rule_name, confidence, created_at)
-      VALUES (@type, @source, @destination, @ruleName, @confidence, unixepoch())
-    `);
-
-    const result = stmt.run({
-      type: op.type,
-      source: op.source,
-      destination: op.destination,
-      ruleName: op.ruleName,
-      confidence: op.confidence,
-    });
-
-    return result.lastInsertRowid as number;
+      VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+    `, [
+      op.type,
+      op.source,
+      op.destination,
+      op.ruleName,
+      op.confidence,
+    ]);
   }
 
   getOperations(limit = 50): OperationRecord[] {
-    const stmt = this.db.prepare(`
+    const rows = this.queryAll<Record<string, unknown>>(`
       SELECT
         id, type, source, destination,
-        rule_name as ruleName, confidence,
-        created_at as createdAt, undone_at as undoneAt
+        rule_name, confidence,
+        created_at, undone_at
       FROM operations
       ORDER BY created_at DESC
       LIMIT ?
-    `);
-    return stmt.all(limit) as OperationRecord[];
+    `, [limit]);
+
+    return rows.map(row => this.mapOperationRecord(row));
   }
 
   getOperation(id: number): OperationRecord | null {
-    const stmt = this.db.prepare(`
+    const row = this.queryOne<Record<string, unknown>>(`
       SELECT
         id, type, source, destination,
-        rule_name as ruleName, confidence,
-        created_at as createdAt, undone_at as undoneAt
+        rule_name, confidence,
+        created_at, undone_at
       FROM operations WHERE id = ?
-    `);
-    return stmt.get(id) as OperationRecord | null;
+    `, [id]);
+
+    if (!row) return null;
+    return this.mapOperationRecord(row);
+  }
+
+  private mapOperationRecord(row: Record<string, unknown>): OperationRecord {
+    return {
+      id: row.id as number,
+      type: row.type as string,
+      source: row.source as string,
+      destination: row.destination as string | null,
+      ruleName: row.rule_name as string | null,
+      confidence: row.confidence as number | null,
+      createdAt: row.created_at as number,
+      undoneAt: row.undone_at as number | null,
+    };
   }
 
   markOperationUndone(id: number): void {
-    const stmt = this.db.prepare('UPDATE operations SET undone_at = unixepoch() WHERE id = ?');
-    stmt.run(id);
+    this.run('UPDATE operations SET undone_at = strftime(\'%s\', \'now\') WHERE id = ?', [id]);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -203,61 +317,70 @@ export class Database {
   // ═══════════════════════════════════════════════════════════════
 
   insertPattern(pattern: Omit<PatternRecord, 'id' | 'createdAt'>): number {
-    const stmt = this.db.prepare(`
+    return this.run(`
       INSERT INTO patterns (type, pattern, destination, occurrences, last_used, created_at)
-      VALUES (@type, @pattern, @destination, @occurrences, @lastUsed, unixepoch())
-    `);
-
-    const result = stmt.run({
-      type: pattern.type,
-      pattern: pattern.pattern,
-      destination: pattern.destination,
-      occurrences: pattern.occurrences,
-      lastUsed: pattern.lastUsed,
-    });
-
-    return result.lastInsertRowid as number;
+      VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+    `, [
+      pattern.type,
+      pattern.pattern,
+      pattern.destination,
+      pattern.occurrences,
+      pattern.lastUsed,
+    ]);
   }
 
   updatePatternOccurrence(id: number): void {
-    const stmt = this.db.prepare(`
+    this.run(`
       UPDATE patterns
-      SET occurrences = occurrences + 1, last_used = unixepoch()
+      SET occurrences = occurrences + 1, last_used = strftime('%s', 'now')
       WHERE id = ?
-    `);
-    stmt.run(id);
+    `, [id]);
   }
 
   getPatterns(type?: string): PatternRecord[] {
     if (type) {
-      const stmt = this.db.prepare(`
+      const rows = this.queryAll<Record<string, unknown>>(`
         SELECT
           id, type, pattern, destination, occurrences,
-          last_used as lastUsed, created_at as createdAt
+          last_used, created_at
         FROM patterns WHERE type = ?
         ORDER BY occurrences DESC
-      `);
-      return stmt.all(type) as PatternRecord[];
+      `, [type]);
+      return rows.map(row => this.mapPatternRecord(row));
     }
 
-    const stmt = this.db.prepare(`
+    const rows = this.queryAll<Record<string, unknown>>(`
       SELECT
         id, type, pattern, destination, occurrences,
-        last_used as lastUsed, created_at as createdAt
+        last_used, created_at
       FROM patterns
       ORDER BY occurrences DESC
     `);
-    return stmt.all() as PatternRecord[];
+    return rows.map(row => this.mapPatternRecord(row));
   }
 
   findPattern(type: string, pattern: string): PatternRecord | null {
-    const stmt = this.db.prepare(`
+    const row = this.queryOne<Record<string, unknown>>(`
       SELECT
         id, type, pattern, destination, occurrences,
-        last_used as lastUsed, created_at as createdAt
+        last_used, created_at
       FROM patterns WHERE type = ? AND pattern = ?
-    `);
-    return stmt.get(type, pattern) as PatternRecord | null;
+    `, [type, pattern]);
+
+    if (!row) return null;
+    return this.mapPatternRecord(row);
+  }
+
+  private mapPatternRecord(row: Record<string, unknown>): PatternRecord {
+    return {
+      id: row.id as number,
+      type: row.type as string,
+      pattern: row.pattern as string,
+      destination: row.destination as string,
+      occurrences: row.occurrences as number,
+      lastUsed: row.last_used as number,
+      createdAt: row.created_at as number,
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -270,19 +393,20 @@ export class Database {
     totalOperations: number;
     categories: Record<string, number>;
   } {
-    const files = this.db.prepare('SELECT COUNT(*) as count, SUM(size) as totalSize FROM files').get() as {
-      count: number;
-      totalSize: number;
-    };
+    const files = this.queryOne<{ count: number; totalSize: number }>(
+      'SELECT COUNT(*) as count, SUM(size) as totalSize FROM files'
+    ) || { count: 0, totalSize: 0 };
 
-    const ops = this.db.prepare('SELECT COUNT(*) as count FROM operations').get() as { count: number };
+    const ops = this.queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM operations'
+    ) || { count: 0 };
 
-    const cats = this.db.prepare(`
+    const cats = this.queryAll<{ category: string; count: number }>(`
       SELECT category, COUNT(*) as count
       FROM files
       WHERE category IS NOT NULL
       GROUP BY category
-    `).all() as { category: string; count: number }[];
+    `);
 
     const categories: Record<string, number> = {};
     for (const cat of cats) {

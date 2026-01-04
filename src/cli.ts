@@ -16,7 +16,7 @@ import { Executor } from './core/executor.js';
 import { Watcher } from './core/watcher.js';
 import { Database } from './storage/database.js';
 import { ModelManager } from './ai/model-manager.js';
-import { renderScanStats, renderFileTable } from './ui/table.js';
+import { renderScanStats } from './ui/table.js';
 import { logger } from './utils/logger.js';
 
 const program = new Command();
@@ -315,7 +315,7 @@ program
       console.log(chalk.dim(`${time} |`) + chalk.cyan(` New: ${file.filename}`));
     });
 
-    watcher.on('organized', (file, destination) => {
+    watcher.on('organized', (_file, destination) => {
       console.log(chalk.green(`       -> ${destination}`));
     });
 
@@ -538,10 +538,10 @@ program
       const matchedRule = ruleEngine.match(analysis);
 
       if (matchedRule) {
-        console.log(chalk.green(`\n  Matched rule: ${matchedRule.name}`));
-        console.log(chalk.dim(`  Priority: ${matchedRule.priority}`));
-        if (matchedRule.action.moveTo) {
-          console.log(chalk.cyan(`  Destination: ${matchedRule.action.moveTo}\n`));
+        console.log(chalk.green(`\n  Matched rule: ${matchedRule.rule.name}`));
+        console.log(chalk.dim(`  Priority: ${matchedRule.rule.priority}`));
+        if (matchedRule.destination) {
+          console.log(chalk.cyan(`  Destination: ${matchedRule.destination}\n`));
         }
       } else {
         console.log(chalk.yellow('\n  No matching rule found.\n'));

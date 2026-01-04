@@ -1,5 +1,5 @@
-import { dirname, basename, join } from 'path';
-import { safeMove, safeCopy, safeDelete, ensureDir, exists } from '../utils/fs-safe.js';
+import { dirname, join } from 'path';
+import { safeMove, safeCopy, safeDelete, ensureDir } from '../utils/fs-safe.js';
 import { Database } from '../storage/database.js';
 import type { Suggestion } from './suggester.js';
 

@@ -1,7 +1,7 @@
 import { stat } from 'fs/promises';
 import { basename, extname } from 'path';
 import { listDirectory } from '../utils/fs-safe.js';
-import { getMimeType, getFileCategory } from '../utils/mime.js';
+import { getMimeType } from '../utils/mime.js';
 import { hashFileQuick } from '../utils/file-hash.js';
 import { Database } from '../storage/database.js';
 import type { FileAnalysis } from './analyzer.js';
@@ -27,10 +27,8 @@ export interface ScanResult {
 }
 
 export class Scanner {
-  private db: Database;
-
-  constructor(db: Database) {
-    this.db = db;
+  constructor(_db: Database) {
+    // db will be used for caching scan results
   }
 
   async scan(dirPath: string, options: ScanOptions = {}): Promise<ScanResult[]> {

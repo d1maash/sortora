@@ -58,9 +58,12 @@ export class ClassifierService {
       multi_label: false,
     });
 
-    return result.labels.map((label: string, i: number) => ({
+    // Handle both single result and array result
+    const output = Array.isArray(result) ? result[0] : result;
+
+    return output.labels.map((label: string, i: number) => ({
       label,
-      score: result.scores[i],
+      score: output.scores[i],
     }));
   }
 

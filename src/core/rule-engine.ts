@@ -1,4 +1,4 @@
-import { basename, dirname } from 'path';
+import { dirname } from 'path';
 import { type Config, expandPath } from '../config.js';
 import type { FileAnalysis } from './analyzer.js';
 import { interpolatePath } from '../utils/paths.js';

@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { Database as SqlJsDatabase } from 'sql.js';
 
 interface Migration {
   version: number;
@@ -28,7 +28,7 @@ const migrations: Migration[] = [
         category TEXT,
         category_confidence REAL,
         ocr_text TEXT,
-        analyzed_at INTEGER DEFAULT (unixepoch())
+        analyzed_at INTEGER DEFAULT (strftime('%s', 'now'))
       );
 
       -- Operations table
@@ -39,7 +39,7 @@ const migrations: Migration[] = [
         destination TEXT,
         rule_name TEXT,
         confidence REAL,
-        created_at INTEGER DEFAULT (unixepoch()),
+        created_at INTEGER DEFAULT (strftime('%s', 'now')),
         undone_at INTEGER
       );
 
@@ -51,7 +51,7 @@ const migrations: Migration[] = [
         destination TEXT NOT NULL,
         occurrences INTEGER DEFAULT 1,
         last_used INTEGER,
-        created_at INTEGER DEFAULT (unixepoch())
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
       );
 
       -- Schema version table
@@ -77,33 +77,45 @@ const migrations: Migration[] = [
   },
 ];
 
-export function runMigrations(db: Database.Database): void {
+export function runMigrations(db: SqlJsDatabase): void {
   // Ensure schema_version table exists
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY
     )
   `);
 
   // Get current version
-  const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as { version: number | null };
-  const currentVersion = row?.version || 0;
+  const result = db.exec('SELECT MAX(version) as version FROM schema_version');
+  const currentVersion = result.length > 0 && result[0].values.length > 0
+    ? (result[0].values[0][0] as number | null) || 0
+    : 0;
 
   // Run pending migrations
   for (const migration of migrations) {
     if (migration.version > currentVersion) {
-      db.transaction(() => {
-        db.exec(migration.up);
-        db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(migration.version);
-      })();
+      // sql.js doesn't have native transactions like better-sqlite3
+      // but we can use BEGIN/COMMIT
+      db.run('BEGIN TRANSACTION');
+      try {
+        db.run(migration.up);
+        db.run('INSERT INTO schema_version (version) VALUES (?)', [migration.version]);
+        db.run('COMMIT');
+      } catch (error) {
+        db.run('ROLLBACK');
+        throw error;
+      }
     }
   }
 }
 
-export function getCurrentVersion(db: Database.Database): number {
+export function getCurrentVersion(db: SqlJsDatabase): number {
   try {
-    const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as { version: number | null };
-    return row?.version || 0;
+    const result = db.exec('SELECT MAX(version) as version FROM schema_version');
+    if (result.length > 0 && result[0].values.length > 0) {
+      return (result[0].values[0][0] as number | null) || 0;
+    }
+    return 0;
   } catch {
     return 0;
   }
