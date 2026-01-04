@@ -1,0 +1,72 @@
+{
+  "name": "sortora",
+  "version": "0.1.0",
+  "description": "Offline AI file organizer with mini models",
+  "type": "module",
+  "bin": {
+    "sortora": "./bin/cli.js"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli.ts",
+    "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",
+    "test": "vitest",
+    "lint": "eslint src/",
+    "start": "node ./bin/cli.js",
+    "postinstall": "node scripts/download-models.js"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.0",
+    "tesseract.js": "^5.0.5",
+    "better-sqlite3": "^9.6.0",
+    "chokidar": "^3.6.0",
+    "fs-extra": "^11.2.0",
+    "glob": "^10.4.0",
+    "sharp": "^0.33.4",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.7.0",
+    "music-metadata": "^7.14.0",
+    "exif-reader": "^2.0.0",
+    "xxhash-wasm": "^1.0.2",
+    "mime-types": "^2.1.35",
+    "commander": "^12.1.0",
+    "inquirer": "^9.2.0",
+    "chalk": "^5.3.0",
+    "ora": "^8.0.1",
+    "cli-table3": "^0.6.5",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0",
+    "date-fns": "^3.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.11.0",
+    "tsup": "^8.1.0",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.14.0",
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/fs-extra": "^11.0.4",
+    "@types/inquirer": "^9.0.7",
+    "@types/pdf-parse": "^1.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "file-organizer",
+    "ai",
+    "offline",
+    "cli",
+    "file-management"
+  ],
+  "author": "",
+  "license": "MIT"
+}
