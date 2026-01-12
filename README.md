@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/assets/logo.png" alt="Sortora" width="120" />
-</p>
-
 <h1 align="center">Sortora</h1>
 
 <p align="center">
