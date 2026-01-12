@@ -21,8 +21,55 @@ import {
   access,
   constants,
 } from 'fs/promises';
-import { dirname, join, basename } from 'path';
+import { dirname, join, basename, extname, resolve, relative, isAbsolute } from 'path';
 import { homedir, platform } from 'os';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('fs-safe');
+
+/**
+ * Validates that a path doesn't escape the allowed base directory
+ * Prevents path traversal attacks (e.g., ../../../etc/passwd)
+ */
+export function validatePath(targetPath: string, baseDir?: string): { valid: boolean; normalized: string; error?: string } {
+  // Normalize the path to resolve .. and .
+  const normalized = resolve(targetPath);
+
+  // If no base directory specified, just return normalized path
+  if (!baseDir) {
+    return { valid: true, normalized };
+  }
+
+  const normalizedBase = resolve(baseDir);
+  const relativePath = relative(normalizedBase, normalized);
+
+  // Check if the path escapes the base directory
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    return {
+      valid: false,
+      normalized,
+      error: `Path traversal detected: ${targetPath} escapes base directory ${baseDir}`,
+    };
+  }
+
+  return { valid: true, normalized };
+}
+
+/**
+ * Safely parses filename into base and extension
+ * Handles edge cases like folders with dots in names
+ */
+export function parseFilename(filePath: string): { base: string; ext: string } {
+  const filename = basename(filePath);
+  const dir = dirname(filePath);
+  const ext = extname(filename);
+  const base = ext ? filename.slice(0, -ext.length) : filename;
+
+  return {
+    base: join(dir, base),
+    ext,
+  };
+}
 
 export async function ensureDir(dirPath: string): Promise<void> {
   if (!existsSync(dirPath)) {
@@ -105,33 +152,65 @@ export function getFileInfoSync(path: string): ReturnType<typeof getFileInfo> ex
   }
 }
 
-export async function safeCopy(source: string, destination: string): Promise<void> {
-  const destDir = dirname(destination);
+export async function safeCopy(
+  source: string,
+  destination: string,
+  options: { baseDir?: string } = {}
+): Promise<string> {
+  // Validate source path
+  const sourceValidation = validatePath(source, options.baseDir);
+  if (!sourceValidation.valid) {
+    throw new Error(sourceValidation.error);
+  }
+
+  // Validate destination path
+  const destValidation = validatePath(destination, options.baseDir);
+  if (!destValidation.valid) {
+    throw new Error(destValidation.error);
+  }
+
+  const destDir = dirname(destValidation.normalized);
   await ensureDir(destDir);
 
-  // Handle name collision
-  let finalDest = destination;
+  // Handle name collision using proper filename parsing
+  let finalDest = destValidation.normalized;
   let counter = 1;
-  const ext = destination.includes('.') ? destination.slice(destination.lastIndexOf('.')) : '';
-  const base = destination.includes('.') ? destination.slice(0, destination.lastIndexOf('.')) : destination;
+  const { base, ext } = parseFilename(destValidation.normalized);
 
   while (await exists(finalDest)) {
     finalDest = `${base} (${counter})${ext}`;
     counter++;
   }
 
-  await copyFile(source, finalDest);
+  await copyFile(sourceValidation.normalized, finalDest);
+  logger.debug(`Copied ${source} to ${finalDest}`);
+  return finalDest;
 }
 
-export async function safeMove(source: string, destination: string): Promise<string> {
-  const destDir = dirname(destination);
+export async function safeMove(
+  source: string,
+  destination: string,
+  options: { baseDir?: string } = {}
+): Promise<string> {
+  // Validate source path
+  const sourceValidation = validatePath(source, options.baseDir);
+  if (!sourceValidation.valid) {
+    throw new Error(sourceValidation.error);
+  }
+
+  // Validate destination path
+  const destValidation = validatePath(destination, options.baseDir);
+  if (!destValidation.valid) {
+    throw new Error(destValidation.error);
+  }
+
+  const destDir = dirname(destValidation.normalized);
   await ensureDir(destDir);
 
-  // Handle name collision
-  let finalDest = destination;
+  // Handle name collision using proper filename parsing
+  let finalDest = destValidation.normalized;
   let counter = 1;
-  const ext = destination.includes('.') ? destination.slice(destination.lastIndexOf('.')) : '';
-  const base = destination.includes('.') ? destination.slice(0, destination.lastIndexOf('.')) : destination;
+  const { base, ext } = parseFilename(destValidation.normalized);
 
   while (await exists(finalDest)) {
     finalDest = `${base} (${counter})${ext}`;
@@ -139,23 +218,37 @@ export async function safeMove(source: string, destination: string): Promise<str
   }
 
   try {
-    await rename(source, finalDest);
+    await rename(sourceValidation.normalized, finalDest);
   } catch (error) {
     // Cross-device move: copy then delete
     if ((error as NodeJS.ErrnoException).code === 'EXDEV') {
-      await copyFile(source, finalDest);
-      await unlink(source);
+      await copyFile(sourceValidation.normalized, finalDest);
+      await unlink(sourceValidation.normalized);
     } else {
       throw error;
     }
   }
 
+  logger.debug(`Moved ${source} to ${finalDest}`);
   return finalDest;
 }
 
-export async function safeDelete(path: string, toTrash = true): Promise<void> {
+export interface TrashInfo {
+  originalPath: string;
+  trashPath: string;
+  timestamp: number;
+}
+
+// Map to track trashed files for undo functionality
+const trashRegistry = new Map<string, TrashInfo>();
+
+export async function safeDelete(
+  path: string,
+  toTrash = true
+): Promise<TrashInfo | null> {
   if (!await exists(path)) {
-    return;
+    logger.warn(`File not found for deletion: ${path}`);
+    return null;
   }
 
   if (toTrash) {
@@ -167,8 +260,69 @@ export async function safeDelete(path: string, toTrash = true): Promise<void> {
     const trashDest = join(trashPath, `${timestamp}-${filename}`);
 
     await safeMove(path, trashDest);
+
+    const trashInfo: TrashInfo = {
+      originalPath: path,
+      trashPath: trashDest,
+      timestamp,
+    };
+
+    // Register in trash registry for undo
+    trashRegistry.set(path, trashInfo);
+    logger.debug(`Moved to trash: ${path} -> ${trashDest}`);
+
+    return trashInfo;
   } else {
     await unlink(path);
+    logger.debug(`Permanently deleted: ${path}`);
+    return null;
+  }
+}
+
+/**
+ * Restore a file from trash to its original location
+ */
+export async function restoreFromTrash(originalPath: string): Promise<boolean> {
+  const trashInfo = trashRegistry.get(originalPath);
+
+  if (!trashInfo) {
+    logger.warn(`No trash info found for: ${originalPath}`);
+    return false;
+  }
+
+  if (!await exists(trashInfo.trashPath)) {
+    logger.error(`Trash file not found: ${trashInfo.trashPath}`);
+    trashRegistry.delete(originalPath);
+    return false;
+  }
+
+  try {
+    await safeMove(trashInfo.trashPath, trashInfo.originalPath);
+    trashRegistry.delete(originalPath);
+    logger.debug(`Restored from trash: ${trashInfo.trashPath} -> ${originalPath}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to restore from trash: ${error}`);
+    return false;
+  }
+}
+
+/**
+ * Get trash info for a file (if it was trashed)
+ */
+export function getTrashInfo(originalPath: string): TrashInfo | undefined {
+  return trashRegistry.get(originalPath);
+}
+
+/**
+ * Clear old entries from trash registry (cleanup)
+ */
+export function cleanupTrashRegistry(maxAge = 24 * 60 * 60 * 1000): void {
+  const now = Date.now();
+  for (const [path, info] of trashRegistry.entries()) {
+    if (now - info.timestamp > maxAge) {
+      trashRegistry.delete(path);
+    }
   }
 }
 
@@ -184,8 +338,26 @@ export function getTrashPath(): string {
     return join(xdgDataHome, 'Trash', 'files');
   }
 
-  // Windows - use a local trash folder
-  return join(homedir(), '.sortora-trash');
+  // Windows - use sortora's own trash folder
+  // Note: Windows Recycle Bin requires Shell32 API which isn't easily accessible from Node.js
+  // For proper Windows Recycle Bin support, consider using a native module
+  const sortoraTrash = join(homedir(), '.sortora', 'trash');
+  return sortoraTrash;
+}
+
+/**
+ * Get the trash info directory (for Linux XDG compliance)
+ */
+export function getTrashInfoPath(): string {
+  const os = platform();
+
+  if (os === 'linux') {
+    const xdgDataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+    return join(xdgDataHome, 'Trash', 'info');
+  }
+
+  // For macOS and Windows, info is stored in memory (trashRegistry)
+  return getTrashPath();
 }
 
 export async function listDirectory(

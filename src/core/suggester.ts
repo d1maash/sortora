@@ -1,7 +1,8 @@
-import { join } from 'path';
+import { join, dirname, basename } from 'path';
 import { RuleEngine, type RuleMatch, type MatchOptions } from './rule-engine.js';
 import type { FileAnalysis } from './analyzer.js';
 import type { Config } from '../config.js';
+import { exists } from '../utils/fs-safe.js';
 
 export interface Suggestion {
   file: FileAnalysis;
@@ -79,9 +80,14 @@ export class Suggester {
       return null;
     }
 
-    // Add filename to destination if it's a directory
-    if (action !== 'delete' && !finalDestination.includes(file.filename)) {
-      finalDestination = join(finalDestination, file.filename);
+    // Add filename to destination if it's a directory path (doesn't end with a filename)
+    // Use basename comparison instead of includes to avoid false positives
+    if (action !== 'delete') {
+      const destBasename = basename(finalDestination);
+      // If destination basename doesn't match file's filename, append the filename
+      if (destBasename !== file.filename) {
+        finalDestination = join(finalDestination, file.filename);
+      }
     }
 
     // Don't suggest moving to same location
@@ -196,10 +202,8 @@ export class Suggester {
     const groups = new Map<string, Suggestion[]>();
 
     for (const suggestion of suggestions) {
-      // Get parent directory as group key
-      const parts = suggestion.destination.split('/');
-      parts.pop(); // Remove filename
-      const dir = parts.join('/');
+      // Get parent directory as group key using path.dirname for cross-platform support
+      const dir = dirname(suggestion.destination);
 
       const existing = groups.get(dir) || [];
       existing.push(suggestion);

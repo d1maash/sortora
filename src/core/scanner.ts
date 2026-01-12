@@ -4,7 +4,10 @@ import { listDirectory } from '../utils/fs-safe.js';
 import { getMimeType } from '../utils/mime.js';
 import { hashFileQuick } from '../utils/file-hash.js';
 import { Database } from '../storage/database.js';
+import { createLogger } from '../utils/logger.js';
 import type { FileAnalysis } from './analyzer.js';
+
+const logger = createLogger('scanner');
 
 export interface ScanOptions {
   recursive?: boolean;
@@ -13,6 +16,10 @@ export interface ScanOptions {
   extensions?: string[];
   excludePatterns?: string[];
   maxDepth?: number;
+  /** Enable incremental scanning - only scan files modified since last scan */
+  incremental?: boolean;
+  /** Callback for progress reporting */
+  onProgress?: (scanned: number, total: number, currentFile: string) => void;
 }
 
 export interface ScanResult {
@@ -26,9 +33,30 @@ export interface ScanResult {
   mimeType: string | null;
 }
 
+export interface ScanStats {
+  totalFiles: number;
+  scannedFiles: number;
+  skippedFiles: number;
+  newFiles: number;
+  modifiedFiles: number;
+  unchangedFiles: number;
+  errors: number;
+  duration: number;
+}
+
 export class Scanner {
-  constructor(_db: Database) {
-    // db will be used for caching scan results
+  private db: Database;
+  private scanCache = new Map<string, { mtime: number; result: ScanResult }>();
+
+  constructor(db: Database) {
+    this.db = db;
+  }
+
+  /**
+   * Clear the scan cache
+   */
+  clearCache(): void {
+    this.scanCache.clear();
   }
 
   async scan(dirPath: string, options: ScanOptions = {}): Promise<ScanResult[]> {
@@ -37,7 +65,12 @@ export class Scanner {
       includeHidden = false,
       extensions,
       excludePatterns = [],
+      incremental = false,
+      onProgress,
     } = options;
+
+    const startTime = Date.now();
+    logger.info(`Starting scan of ${dirPath} (recursive: ${recursive}, incremental: ${incremental})`);
 
     const files = await listDirectory(dirPath, {
       recursive,
@@ -45,18 +78,23 @@ export class Scanner {
     });
 
     const results: ScanResult[] = [];
+    let scanned = 0;
+    let skipped = 0;
+    let errors = 0;
 
     for (const filePath of files) {
       const filename = basename(filePath);
 
       // Check exclusion patterns
       if (excludePatterns.some(p => this.matchPattern(filename, p))) {
+        skipped++;
         continue;
       }
 
       // Check extension filter
       const ext = extname(filename).toLowerCase().slice(1);
       if (extensions && extensions.length > 0 && !extensions.includes(ext)) {
+        skipped++;
         continue;
       }
 
@@ -67,7 +105,17 @@ export class Scanner {
           continue;
         }
 
-        results.push({
+        // Incremental scanning: check if file was modified since last scan
+        if (incremental) {
+          const cached = this.scanCache.get(filePath);
+          if (cached && cached.mtime === stats.mtime.getTime()) {
+            results.push(cached.result);
+            scanned++;
+            continue;
+          }
+        }
+
+        const result: ScanResult = {
           path: filePath,
           filename,
           extension: ext,
@@ -76,14 +124,143 @@ export class Scanner {
           modified: stats.mtime,
           accessed: stats.atime,
           mimeType: getMimeType(filename),
+        };
+
+        results.push(result);
+
+        // Update cache for incremental scanning
+        this.scanCache.set(filePath, {
+          mtime: stats.mtime.getTime(),
+          result,
         });
-      } catch {
-        // Skip files that can't be accessed
+
+        scanned++;
+
+        // Report progress
+        if (onProgress) {
+          onProgress(scanned, files.length, filePath);
+        }
+      } catch (error) {
+        // Log the error instead of silently skipping
+        logger.warn(`Failed to access file: ${filePath}`, error instanceof Error ? error.message : error);
+        errors++;
         continue;
       }
     }
 
+    const duration = Date.now() - startTime;
+    logger.info(`Scan complete: ${scanned} files scanned, ${skipped} skipped, ${errors} errors in ${duration}ms`);
+
     return results;
+  }
+
+  /**
+   * Scan with detailed statistics
+   */
+  async scanWithStats(dirPath: string, options: ScanOptions = {}): Promise<{ results: ScanResult[]; stats: ScanStats }> {
+    const startTime = Date.now();
+    const stats: ScanStats = {
+      totalFiles: 0,
+      scannedFiles: 0,
+      skippedFiles: 0,
+      newFiles: 0,
+      modifiedFiles: 0,
+      unchangedFiles: 0,
+      errors: 0,
+      duration: 0,
+    };
+
+    const {
+      recursive = false,
+      includeHidden = false,
+      extensions,
+      excludePatterns = [],
+      incremental = false,
+      onProgress,
+    } = options;
+
+    const files = await listDirectory(dirPath, {
+      recursive,
+      includeHidden,
+    });
+
+    stats.totalFiles = files.length;
+    const results: ScanResult[] = [];
+
+    for (const filePath of files) {
+      const filename = basename(filePath);
+
+      // Check exclusion patterns
+      if (excludePatterns.some(p => this.matchPattern(filename, p))) {
+        stats.skippedFiles++;
+        continue;
+      }
+
+      // Check extension filter
+      const ext = extname(filename).toLowerCase().slice(1);
+      if (extensions && extensions.length > 0 && !extensions.includes(ext)) {
+        stats.skippedFiles++;
+        continue;
+      }
+
+      try {
+        const fileStats = await stat(filePath);
+
+        if (!fileStats.isFile()) {
+          continue;
+        }
+
+        // Check database for existing record
+        const existingRecord = this.db.getFile(filePath);
+
+        // Incremental scanning
+        if (incremental) {
+          const cached = this.scanCache.get(filePath);
+          if (cached && cached.mtime === fileStats.mtime.getTime()) {
+            results.push(cached.result);
+            stats.unchangedFiles++;
+            stats.scannedFiles++;
+            continue;
+          }
+        }
+
+        const result: ScanResult = {
+          path: filePath,
+          filename,
+          extension: ext,
+          size: fileStats.size,
+          created: fileStats.birthtime,
+          modified: fileStats.mtime,
+          accessed: fileStats.atime,
+          mimeType: getMimeType(filename),
+        };
+
+        results.push(result);
+        this.scanCache.set(filePath, { mtime: fileStats.mtime.getTime(), result });
+
+        // Track new vs modified
+        if (!existingRecord) {
+          stats.newFiles++;
+        } else if (existingRecord.modifiedAt !== fileStats.mtime.getTime()) {
+          stats.modifiedFiles++;
+        } else {
+          stats.unchangedFiles++;
+        }
+
+        stats.scannedFiles++;
+
+        if (onProgress) {
+          onProgress(stats.scannedFiles, stats.totalFiles, filePath);
+        }
+      } catch (error) {
+        logger.warn(`Failed to access file: ${filePath}`, error instanceof Error ? error.message : error);
+        stats.errors++;
+        continue;
+      }
+    }
+
+    stats.duration = Date.now() - startTime;
+    return { results, stats };
   }
 
   async scanWithHashes(

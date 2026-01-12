@@ -61,3 +61,15 @@ class Logger {
 }
 
 export const logger = new Logger();
+
+/**
+ * Create a namespaced logger for a specific module
+ */
+export function createLogger(namespace: string) {
+  return {
+    debug: (message: string, ...args: unknown[]) => logger.debug(`[${namespace}] ${message}`, ...args),
+    info: (message: string, ...args: unknown[]) => logger.info(`[${namespace}] ${message}`, ...args),
+    warn: (message: string, ...args: unknown[]) => logger.warn(`[${namespace}] ${message}`, ...args),
+    error: (message: string, ...args: unknown[]) => logger.error(`[${namespace}] ${message}`, ...args),
+  };
+}
