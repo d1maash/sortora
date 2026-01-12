@@ -29,6 +29,18 @@
 
 Sortora is an intelligent CLI tool that automatically organizes your files using smart filename analysis and optional AI classification. It works **100% offline** - no cloud services, no data leaving your machine.
 
+```
+   ███████╗ ██████╗ ██████╗ ████████╗ ██████╗ ██████╗  █████╗
+   ██╔════╝██╔═══██╗██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗██╔══██╗
+   ███████╗██║   ██║██████╔╝   ██║   ██║   ██║██████╔╝███████║
+   ╚════██║██║   ██║██╔══██╗   ██║   ██║   ██║██╔══██╗██╔══██║
+   ███████║╚██████╔╝██║  ██║   ██║   ╚██████╔╝██║  ██║██║  ██║
+   ╚══════╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+
+   Smart Offline File Organizer
+   ───────────────────────────────────────────────────────
+```
+
 ```bash
 # Organize your Downloads folder
 sortora organize ~/Downloads
@@ -77,6 +89,12 @@ sortora organize ~/Downloads --dry-run
 
 ## Features
 
+### Beautiful CLI Experience
+- **Animated startup banner** with gradient colors
+- **Progress indicators** for all operations
+- **Colored output** for easy reading
+- **Interactive mode** with intuitive prompts
+
 ### Smart Filename Analysis
 - **Extracts company names**: `Contract_Acme_Inc.pdf` → `Contracts/Acme Inc/`
 - **Extracts person names**: `John-Smith-Resume.pdf` → `Resumes/John Smith/`
@@ -116,17 +134,23 @@ sortora setup
 
 ## Quick Start
 
-### 1. Scan a directory
+### 1. Run Sortora
+```bash
+# Just run sortora to see the animated banner and help
+sortora
+```
+
+### 2. Scan a directory
 ```bash
 sortora scan ~/Downloads
 ```
 
-### 2. Preview organization
+### 3. Preview organization
 ```bash
 sortora organize ~/Downloads --dry-run
 ```
 
-### 3. Organize files
+### 4. Organize files
 ```bash
 # Interactive mode (confirm each action)
 sortora organize ~/Downloads -i
@@ -139,6 +163,7 @@ sortora organize ~/Downloads --auto
 
 | Command | Description |
 |---------|-------------|
+| `sortora` | Show animated banner and help |
 | `sortora setup` | Initial setup, download AI models |
 | `sortora scan <path>` | Scan and analyze files |
 | `sortora organize <path>` | Organize files based on rules |
@@ -231,6 +256,7 @@ destinations:
 ## Documentation
 
 - [Installation Guide](docs/installation.md)
+- [CLI Usage Guide](docs/cli-usage.md)
 - [Configuration](docs/configuration.md)
 - [Rules System](docs/rules.md)
 - [AI Features](docs/ai-features.md)
@@ -247,6 +273,7 @@ destinations:
 | Code file support | Yes | No |
 | Multi-language filenames | Yes | Often EN only |
 | Undo support | Yes | Rarely |
+| Beautiful CLI | Yes | Basic |
 | Open source | Yes | Often paid |
 
 ## Contributing
@@ -265,6 +292,9 @@ npm run dev
 
 # Build
 npm run build
+
+# Test
+npm test
 ```
 
 ## License

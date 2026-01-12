@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import YAML from 'yaml';
 import { z } from 'zod';
 
-export const VERSION = '0.1.0';
+export const VERSION = '1.1.1';
 
 const ConfigSchema = z.object({
   version: z.number().default(1),

@@ -16,7 +16,7 @@ npm install -g sortora
 
 ```bash
 sortora --version
-# Output: 1.1.0
+# Output: 1.1.1
 ```
 
 ## Initial Setup
