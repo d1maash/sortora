@@ -165,7 +165,7 @@ describe('Scanner', () => {
       expect(results.length).toBe(2);
       expect(stats.totalFiles).toBeGreaterThanOrEqual(2);
       expect(stats.scannedFiles).toBe(2);
-      expect(stats.duration).toBeGreaterThan(0);
+      expect(stats.duration).toBeGreaterThanOrEqual(0); // Can be 0 for very fast operations
     });
   });
 

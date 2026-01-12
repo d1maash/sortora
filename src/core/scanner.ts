@@ -274,8 +274,9 @@ export class Scanner {
       try {
         const hash = await hashFileQuick(file.path);
         results.push({ ...file, hash });
-      } catch {
-        // Skip files that can't be hashed
+      } catch (error) {
+        // Log error and skip files that can't be hashed
+        logger.warn(`Failed to hash file: ${file.path}`, error instanceof Error ? error.message : error);
         continue;
       }
     }

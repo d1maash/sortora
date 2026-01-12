@@ -1,5 +1,5 @@
 import { createReadStream } from 'fs';
-import { stat } from 'fs/promises';
+import { stat, readFile } from 'fs/promises';
 import xxhash from 'xxhash-wasm';
 
 let xxhashInstance: Awaited<ReturnType<typeof xxhash>> | null = null;
@@ -12,8 +12,8 @@ async function getXXHash() {
 }
 
 export async function hashFile(filePath: string): Promise<string> {
-  const { h64 } = await getXXHash();
-  const hasher = h64();
+  const { create64 } = await getXXHash();
+  const hasher = create64();
 
   return new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
@@ -31,18 +31,20 @@ export async function hashFile(filePath: string): Promise<string> {
 }
 
 export async function hashFileQuick(filePath: string, sampleSize = 65536): Promise<string> {
-  const { h64 } = await getXXHash();
-  const hasher = h64();
-
   const fileStats = await stat(filePath);
   const fileSize = fileStats.size;
 
-  // For small files, hash the entire file
+  // For small files, use simple hash
   if (fileSize <= sampleSize * 3) {
-    return hashFile(filePath);
+    const { h64Raw } = await getXXHash();
+    const content = await readFile(filePath);
+    return h64Raw(content).toString(16).padStart(16, '0');
   }
 
-  // Sample beginning, middle, and end
+  // For large files, sample beginning, middle, and end
+  const { create64 } = await getXXHash();
+  const hasher = create64();
+
   const samples: { start: number; size: number }[] = [
     { start: 0, size: sampleSize },
     { start: Math.floor(fileSize / 2) - sampleSize / 2, size: sampleSize },
@@ -79,16 +81,12 @@ async function readChunk(filePath: string, start: number, size: number): Promise
 
 export async function hashString(str: string): Promise<string> {
   const { h64 } = await getXXHash();
-  const hasher = h64();
-  hasher.update(Buffer.from(str));
-  return hasher.digest().toString(16).padStart(16, '0');
+  return h64(str).toString(16).padStart(16, '0');
 }
 
 export async function hashBuffer(buffer: Buffer): Promise<string> {
-  const { h64 } = await getXXHash();
-  const hasher = h64();
-  hasher.update(buffer);
-  return hasher.digest().toString(16).padStart(16, '0');
+  const { h64Raw } = await getXXHash();
+  return h64Raw(buffer).toString(16).padStart(16, '0');
 }
 
 export function areHashesEqual(hash1: string, hash2: string): boolean {
