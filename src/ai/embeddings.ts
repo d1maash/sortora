@@ -8,7 +8,6 @@ export class EmbeddingService {
   private modelsDir: string;
   private modelName = 'Xenova/all-MiniLM-L6-v2';
   private initialized = false;
-  private lastUsed = 0;
   private unloadTimer: NodeJS.Timeout | null = null;
   private readonly unloadTimeout: number;
 
@@ -30,7 +29,6 @@ export class EmbeddingService {
     });
 
     this.initialized = true;
-    this.lastUsed = Date.now();
     logger.info(`Embedding model loaded in ${Date.now() - startTime}ms`);
 
     this.scheduleUnload();
@@ -91,7 +89,6 @@ export class EmbeddingService {
       await this.init();
     }
 
-    this.lastUsed = Date.now();
     this.scheduleUnload();
 
     const output = await this.model!(text, {
@@ -112,7 +109,6 @@ export class EmbeddingService {
       await this.init();
     }
 
-    this.lastUsed = Date.now();
     this.scheduleUnload();
 
     const embeddings: number[][] = [];

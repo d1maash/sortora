@@ -2,7 +2,6 @@ import { join, dirname, basename } from 'path';
 import { RuleEngine, type RuleMatch, type MatchOptions } from './rule-engine.js';
 import type { FileAnalysis } from './analyzer.js';
 import type { Config } from '../config.js';
-import { exists } from '../utils/fs-safe.js';
 
 export interface Suggestion {
   file: FileAnalysis;

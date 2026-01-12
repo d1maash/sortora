@@ -18,6 +18,7 @@ import { Database } from './storage/database.js';
 import { ModelManager } from './ai/model-manager.js';
 import { renderScanStats, renderFileTable } from './ui/table.js';
 import { logger } from './utils/logger.js';
+import { showBanner } from './ui/banner.js';
 
 const program = new Command();
 
@@ -651,5 +652,23 @@ program
     console.log(chalk.yellow('\n  Unknown action. Use: list, add, test <file>, edit\n'));
   });
 
-// Parse and run
-program.parse();
+// Show animated banner when run without arguments
+async function main() {
+  const args = process.argv.slice(2);
+
+  // Show banner if no command or --help/--version
+  if (args.length === 0) {
+    await showBanner(true);
+    program.outputHelp();
+    return;
+  }
+
+  // Show static banner for commands (non-blocking)
+  if (!args.includes('--help') && !args.includes('-h') && !args.includes('--version') && !args.includes('-V')) {
+    // Silent for actual commands to keep output clean
+  }
+
+  program.parse();
+}
+
+main().catch(console.error);

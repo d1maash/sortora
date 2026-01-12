@@ -1,8 +1,5 @@
 import {
   existsSync,
-  copyFileSync,
-  renameSync,
-  unlinkSync,
   mkdirSync,
   readdirSync,
   statSync,
