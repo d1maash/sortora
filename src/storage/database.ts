@@ -420,4 +420,154 @@ export class Database {
       categories,
     };
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Extended Stats
+  // ═══════════════════════════════════════════════════════════════
+
+  getOperationsByPeriod(period: 'day' | 'week' | 'month'): {
+    total: number;
+    byType: Record<string, number>;
+    byRule: Record<string, number>;
+  } {
+    const now = Math.floor(Date.now() / 1000);
+    let since: number;
+
+    switch (period) {
+      case 'day':
+        since = now - 24 * 60 * 60;
+        break;
+      case 'week':
+        since = now - 7 * 24 * 60 * 60;
+        break;
+      case 'month':
+        since = now - 30 * 24 * 60 * 60;
+        break;
+    }
+
+    const total = this.queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM operations WHERE created_at >= ? AND undone_at IS NULL',
+      [since]
+    ) || { count: 0 };
+
+    const byTypeRows = this.queryAll<{ type: string; count: number }>(`
+      SELECT type, COUNT(*) as count
+      FROM operations
+      WHERE created_at >= ? AND undone_at IS NULL
+      GROUP BY type
+      ORDER BY count DESC
+    `, [since]);
+
+    const byType: Record<string, number> = {};
+    for (const row of byTypeRows) {
+      byType[row.type] = row.count;
+    }
+
+    const byRuleRows = this.queryAll<{ rule_name: string; count: number }>(`
+      SELECT rule_name, COUNT(*) as count
+      FROM operations
+      WHERE created_at >= ? AND undone_at IS NULL AND rule_name IS NOT NULL
+      GROUP BY rule_name
+      ORDER BY count DESC
+    `, [since]);
+
+    const byRule: Record<string, number> = {};
+    for (const row of byRuleRows) {
+      byRule[row.rule_name] = row.count;
+    }
+
+    return {
+      total: total.count,
+      byType,
+      byRule,
+    };
+  }
+
+  getTopRules(limit = 10): { ruleName: string; count: number; lastUsed: number }[] {
+    const rows = this.queryAll<{ rule_name: string; count: number; last_used: number }>(`
+      SELECT rule_name, COUNT(*) as count, MAX(created_at) as last_used
+      FROM operations
+      WHERE rule_name IS NOT NULL AND undone_at IS NULL
+      GROUP BY rule_name
+      ORDER BY count DESC
+      LIMIT ?
+    `, [limit]);
+
+    return rows.map(row => ({
+      ruleName: row.rule_name,
+      count: row.count,
+      lastUsed: row.last_used,
+    }));
+  }
+
+  getDuplicateStats(): {
+    totalGroups: number;
+    totalDuplicateFiles: number;
+    potentialSavings: number;
+  } {
+    const duplicateHashes = this.queryAll<{ hash: string; count: number; size: number }>(`
+      SELECT hash, COUNT(*) as count, size
+      FROM files
+      WHERE hash IS NOT NULL
+      GROUP BY hash
+      HAVING count > 1
+    `);
+
+    let totalGroups = 0;
+    let totalDuplicateFiles = 0;
+    let potentialSavings = 0;
+
+    for (const row of duplicateHashes) {
+      totalGroups++;
+      totalDuplicateFiles += row.count - 1;
+      potentialSavings += row.size * (row.count - 1);
+    }
+
+    return {
+      totalGroups,
+      totalDuplicateFiles,
+      potentialSavings,
+    };
+  }
+
+  getDeletedDuplicatesStats(): {
+    totalDeleted: number;
+    totalSaved: number;
+  } {
+    const result = this.queryOne<{ count: number }>(`
+      SELECT COUNT(*) as count
+      FROM operations
+      WHERE type = 'delete' AND undone_at IS NULL
+    `) || { count: 0 };
+
+    // Get sizes of deleted files from operation source paths
+    // Note: We can't get exact size from deleted files, so we estimate
+    // based on average file size from duplicates that were deleted
+    const avgSize = this.queryOne<{ avg_size: number }>(`
+      SELECT AVG(f.size) as avg_size
+      FROM files f
+      JOIN operations o ON f.path = o.source
+      WHERE o.type = 'delete'
+    `) || { avg_size: 0 };
+
+    return {
+      totalDeleted: result.count,
+      totalSaved: Math.floor(result.count * (avgSize.avg_size || 0)),
+    };
+  }
+
+  getActivityTimeline(days = 30): { date: string; count: number }[] {
+    const now = Math.floor(Date.now() / 1000);
+    const since = now - days * 24 * 60 * 60;
+
+    const rows = this.queryAll<{ date: string; count: number }>(`
+      SELECT date(created_at, 'unixepoch') as date, COUNT(*) as count
+      FROM operations
+      WHERE created_at >= ? AND undone_at IS NULL
+      GROUP BY date
+      ORDER BY date ASC
+    `, [since]);
+
+    return rows;
+  }
 }
