@@ -6,6 +6,29 @@ import { z } from 'zod';
 
 export const VERSION = '1.1.1';
 
+// AI Provider configuration schema
+const AIProviderSchema = z.object({
+  provider: z.enum(['local', 'openai', 'anthropic', 'gemini', 'ollama']).default('local'),
+  openai: z.object({
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    model: z.string().default('gpt-4o-mini'),
+  }).default({}),
+  anthropic: z.object({
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    model: z.string().default('claude-3-haiku-20240307'),
+  }).default({}),
+  gemini: z.object({
+    apiKey: z.string().optional(),
+    model: z.string().default('gemini-1.5-flash'),
+  }).default({}),
+  ollama: z.object({
+    baseUrl: z.string().default('http://localhost:11434'),
+    model: z.string().default('llama3.2'),
+  }).default({}),
+}).default({});
+
 const ConfigSchema = z.object({
   version: z.number().default(1),
   settings: z.object({
@@ -20,6 +43,7 @@ const ConfigSchema = z.object({
       'desktop.ini',
     ]),
   }).default({}),
+  ai: AIProviderSchema,
   destinations: z.record(z.string()).default({
     photos: '~/Pictures/Sorted',
     screenshots: '~/Pictures/Screenshots',
@@ -143,3 +167,82 @@ export function getDestination(config: Config, key: string): string {
 }
 
 export const DEFAULT_CONFIG: Config = ConfigSchema.parse({});
+
+export type AIProviderType = 'local' | 'openai' | 'anthropic' | 'gemini' | 'ollama';
+
+/**
+ * Get the AI provider configuration, with environment variable overrides
+ */
+export function getAIProviderConfig(config: Config): Config['ai'] {
+  const aiConfig = { ...config.ai };
+
+  // Environment variable overrides
+  const envProvider = process.env.SORTORA_AI_PROVIDER as AIProviderType | undefined;
+  if (envProvider) {
+    aiConfig.provider = envProvider;
+  }
+
+  // OpenAI
+  if (process.env.OPENAI_API_KEY) {
+    aiConfig.openai = {
+      ...aiConfig.openai,
+      apiKey: process.env.OPENAI_API_KEY,
+    };
+  }
+  if (process.env.OPENAI_BASE_URL) {
+    aiConfig.openai = {
+      ...aiConfig.openai,
+      baseUrl: process.env.OPENAI_BASE_URL,
+    };
+  }
+  if (process.env.OPENAI_MODEL) {
+    aiConfig.openai = {
+      ...aiConfig.openai,
+      model: process.env.OPENAI_MODEL,
+    };
+  }
+
+  // Anthropic
+  if (process.env.ANTHROPIC_API_KEY) {
+    aiConfig.anthropic = {
+      ...aiConfig.anthropic,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    };
+  }
+  if (process.env.ANTHROPIC_MODEL) {
+    aiConfig.anthropic = {
+      ...aiConfig.anthropic,
+      model: process.env.ANTHROPIC_MODEL,
+    };
+  }
+
+  // Gemini
+  if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+    aiConfig.gemini = {
+      ...aiConfig.gemini,
+      apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
+    };
+  }
+  if (process.env.GEMINI_MODEL) {
+    aiConfig.gemini = {
+      ...aiConfig.gemini,
+      model: process.env.GEMINI_MODEL,
+    };
+  }
+
+  // Ollama
+  if (process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL) {
+    aiConfig.ollama = {
+      ...aiConfig.ollama,
+      baseUrl: process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL || aiConfig.ollama.baseUrl,
+    };
+  }
+  if (process.env.OLLAMA_MODEL) {
+    aiConfig.ollama = {
+      ...aiConfig.ollama,
+      model: process.env.OLLAMA_MODEL,
+    };
+  }
+
+  return aiConfig;
+}
