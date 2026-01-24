@@ -4,6 +4,34 @@ import { formatSize, formatNumber, colorByCategory } from './colors.js';
 import type { FileAnalysis } from '../core/analyzer.js';
 import { getCategoryIcon } from '../utils/mime.js';
 
+export interface PeriodStats {
+  total: number;
+  byType: Record<string, number>;
+  byRule: Record<string, number>;
+}
+
+export interface StatsData {
+  day: PeriodStats;
+  week: PeriodStats;
+  month: PeriodStats;
+  topRules: { ruleName: string; count: number; lastUsed: number }[];
+  duplicates: {
+    totalGroups: number;
+    totalDuplicateFiles: number;
+    potentialSavings: number;
+  };
+  deletedDuplicates: {
+    totalDeleted: number;
+    totalSaved: number;
+  };
+  overall: {
+    totalFiles: number;
+    totalSize: number;
+    totalOperations: number;
+    categories: Record<string, number>;
+  };
+}
+
 export interface TableOptions {
   head?: string[];
   colWidths?: number[];
@@ -236,4 +264,216 @@ export function renderRulesTable(
   }
 
   console.log(table.toString().split('\n').map(line => '  ' + line).join('\n'));
+}
+
+export function renderStatsOverview(stats: StatsData): void {
+  console.log(chalk.bold('\n  Organization Statistics\n'));
+
+  // Period stats table
+  const periodTable = new Table({
+    head: [
+      chalk.bold('Period'),
+      chalk.bold('Files Organized'),
+      chalk.bold('Moves'),
+      chalk.bold('Copies'),
+      chalk.bold('Deletes'),
+    ],
+    colWidths: [12, 18, 10, 10, 10],
+    style: {
+      head: [],
+      border: ['gray'],
+    },
+  });
+
+  const periods: Array<{ name: string; data: PeriodStats }> = [
+    { name: 'Today', data: stats.day },
+    { name: 'This Week', data: stats.week },
+    { name: 'This Month', data: stats.month },
+  ];
+
+  for (const period of periods) {
+    periodTable.push([
+      chalk.cyan(period.name),
+      formatNumber(period.data.total),
+      formatNumber(period.data.byType['move'] || 0),
+      formatNumber(period.data.byType['copy'] || 0),
+      chalk.red(formatNumber(period.data.byType['delete'] || 0)),
+    ]);
+  }
+
+  console.log(periodTable.toString().split('\n').map(line => '  ' + line).join('\n'));
+}
+
+export function renderTopRules(
+  topRules: { ruleName: string; count: number; lastUsed: number }[]
+): void {
+  if (topRules.length === 0) {
+    console.log(chalk.dim('\n  No rules have been triggered yet.\n'));
+    return;
+  }
+
+  console.log(chalk.bold('\n  Most Active Rules\n'));
+
+  const table = new Table({
+    head: [
+      chalk.bold('Rule'),
+      chalk.bold('Triggers'),
+      chalk.bold('Last Used'),
+    ],
+    colWidths: [35, 12, 20],
+    style: {
+      head: [],
+      border: ['gray'],
+    },
+  });
+
+  for (const rule of topRules) {
+    const lastUsed = new Date(rule.lastUsed * 1000);
+    const lastUsedStr = formatRelativeTime(lastUsed);
+
+    table.push([
+      chalk.cyan(rule.ruleName),
+      formatNumber(rule.count),
+      chalk.dim(lastUsedStr),
+    ]);
+  }
+
+  console.log(table.toString().split('\n').map(line => '  ' + line).join('\n'));
+}
+
+export function renderDuplicateStats(stats: StatsData): void {
+  console.log(chalk.bold('\n  Duplicate Files\n'));
+
+  const { duplicates, deletedDuplicates } = stats;
+
+  if (duplicates.totalGroups === 0 && deletedDuplicates.totalDeleted === 0) {
+    console.log(chalk.dim('  No duplicates found or removed.\n'));
+    return;
+  }
+
+  const table = new Table({
+    head: [
+      chalk.bold('Metric'),
+      chalk.bold('Value'),
+    ],
+    colWidths: [35, 20],
+    style: {
+      head: [],
+      border: ['gray'],
+    },
+  });
+
+  if (duplicates.totalGroups > 0) {
+    table.push([
+      'Current duplicate groups',
+      chalk.yellow(formatNumber(duplicates.totalGroups)),
+    ]);
+    table.push([
+      'Duplicate files (excluding originals)',
+      chalk.yellow(formatNumber(duplicates.totalDuplicateFiles)),
+    ]);
+    table.push([
+      'Potential space savings',
+      chalk.yellow(formatSize(duplicates.potentialSavings)),
+    ]);
+  }
+
+  if (deletedDuplicates.totalDeleted > 0) {
+    table.push([
+      'Duplicates removed',
+      chalk.green(formatNumber(deletedDuplicates.totalDeleted)),
+    ]);
+    if (deletedDuplicates.totalSaved > 0) {
+      table.push([
+        'Space saved',
+        chalk.green(formatSize(deletedDuplicates.totalSaved)),
+      ]);
+    }
+  }
+
+  console.log(table.toString().split('\n').map(line => '  ' + line).join('\n'));
+}
+
+export function renderOverallStats(stats: StatsData): void {
+  console.log(chalk.bold('\n  Overall Statistics\n'));
+
+  const { overall } = stats;
+
+  const table = new Table({
+    head: [
+      chalk.bold('Metric'),
+      chalk.bold('Value'),
+    ],
+    colWidths: [35, 20],
+    style: {
+      head: [],
+      border: ['gray'],
+    },
+  });
+
+  table.push([
+    'Total files analyzed',
+    formatNumber(overall.totalFiles),
+  ]);
+  table.push([
+    'Total size tracked',
+    formatSize(overall.totalSize),
+  ]);
+  table.push([
+    'Total operations performed',
+    formatNumber(overall.totalOperations),
+  ]);
+
+  console.log(table.toString().split('\n').map(line => '  ' + line).join('\n'));
+
+  // Categories breakdown
+  const categories = Object.entries(overall.categories);
+  if (categories.length > 0) {
+    console.log(chalk.bold('\n  Files by Category\n'));
+
+    const catTable = new Table({
+      head: [
+        chalk.bold('Category'),
+        chalk.bold('Count'),
+      ],
+      colWidths: [25, 15],
+      style: {
+        head: [],
+        border: ['gray'],
+      },
+    });
+
+    const sortedCats = categories.sort((a, b) => b[1] - a[1]);
+    for (const [category, count] of sortedCats) {
+      const icon = getCategoryIcon(category as Parameters<typeof getCategoryIcon>[0]);
+      const colorFn = colorByCategory(category);
+      catTable.push([
+        `${icon} ${colorFn(category.charAt(0).toUpperCase() + category.slice(1))}`,
+        formatNumber(count),
+      ]);
+    }
+
+    console.log(catTable.toString().split('\n').map(line => '  ' + line).join('\n'));
+  }
+}
+
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) {
+    return 'just now';
+  } else if (diffMin < 60) {
+    return `${diffMin} min ago`;
+  } else if (diffHour < 24) {
+    return `${diffHour} hour${diffHour > 1 ? 's' : ''} ago`;
+  } else if (diffDay < 7) {
+    return `${diffDay} day${diffDay > 1 ? 's' : ''} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
 }
