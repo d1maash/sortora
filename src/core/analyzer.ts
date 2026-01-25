@@ -5,6 +5,12 @@ import { hashFileQuick } from '../utils/file-hash.js';
 import { analyzeByType, type FileMetadata } from '../analyzers/index.js';
 import { EmbeddingService } from '../ai/embeddings.js';
 import { ClassifierService } from '../ai/classifier.js';
+import {
+  type AIProvider,
+  type ProviderType,
+  ProviderManager,
+  type ProviderManagerConfig,
+} from '../ai/providers/index.js';
 import type { ScanResult } from './scanner.js';
 
 export interface FileAnalysis {
@@ -25,33 +31,78 @@ export interface FileAnalysis {
   aiConfidence?: number;
 }
 
+export interface AnalyzerOptions {
+  providerConfig?: ProviderManagerConfig;
+}
+
 export class Analyzer {
   private modelsDir: string;
   private aiEnabled = false;
   private embeddingService: EmbeddingService | null = null;
   private classifierService: ClassifierService | null = null;
+  private providerManager: ProviderManager | null = null;
+  private activeProvider: AIProvider | null = null;
 
   constructor(modelsDir: string) {
     this.modelsDir = modelsDir;
   }
 
+  /**
+   * Enable AI with the default local provider
+   */
   async enableAI(): Promise<void> {
-    if (this.aiEnabled) return;
+    return this.enableAIWithProvider({
+      provider: 'local',
+      local: { modelsDir: this.modelsDir },
+    });
+  }
 
-    this.embeddingService = new EmbeddingService(this.modelsDir);
-    this.classifierService = new ClassifierService(this.modelsDir);
+  /**
+   * Enable AI with a specific provider configuration
+   */
+  async enableAIWithProvider(config: ProviderManagerConfig): Promise<void> {
+    if (this.aiEnabled && this.providerManager?.getProviderType() === config.provider) {
+      return;
+    }
 
-    // Initialize both services
-    await Promise.all([
-      this.embeddingService.init(),
-      this.classifierService.init(),
-    ]);
+    // Dispose previous provider if exists
+    if (this.providerManager) {
+      await this.providerManager.dispose();
+    }
+
+    // Ensure local config has modelsDir
+    if (config.provider === 'local' && !config.local?.modelsDir) {
+      config.local = { modelsDir: this.modelsDir };
+    }
+
+    this.providerManager = new ProviderManager(config);
+    this.activeProvider = await this.providerManager.init();
+
+    // Also initialize embedding service for similarity search
+    if (!this.embeddingService) {
+      this.embeddingService = new EmbeddingService(this.modelsDir);
+      await this.embeddingService.init();
+    }
+
+    // Keep legacy classifier for backward compatibility
+    if (config.provider === 'local' && !this.classifierService) {
+      this.classifierService = new ClassifierService(this.modelsDir);
+      await this.classifierService.init();
+    }
 
     this.aiEnabled = true;
   }
 
   isAIEnabled(): boolean {
     return this.aiEnabled;
+  }
+
+  getActiveProviderType(): ProviderType | null {
+    return this.providerManager?.getProviderType() || null;
+  }
+
+  getActiveProviderName(): string | null {
+    return this.activeProvider?.name || null;
   }
 
   async analyze(filePath: string, useAI = false): Promise<FileAnalysis> {
@@ -95,10 +146,10 @@ export class Analyzer {
       // Type-specific analysis failed
     }
 
-    // AI classification if enabled
-    if (useAI && this.aiEnabled && this.classifierService) {
+    // AI classification if enabled - use active provider
+    if (useAI && this.aiEnabled && this.activeProvider) {
       try {
-        const aiResult = await this.classifierService.classifyFile({
+        const aiResult = await this.activeProvider.classifyFile({
           filename: analysis.filename,
           content: analysis.textContent,
           metadata: analysis.metadata as Record<string, unknown> | undefined,
@@ -177,10 +228,10 @@ export class Analyzer {
       // Type-specific analysis failed
     }
 
-    // AI classification if enabled
-    if (useAI && this.aiEnabled && this.classifierService) {
+    // AI classification if enabled - use active provider
+    if (useAI && this.aiEnabled && this.activeProvider) {
       try {
-        const aiResult = await this.classifierService.classifyFile({
+        const aiResult = await this.activeProvider.classifyFile({
           filename: analysis.filename,
           content: analysis.textContent,
           metadata: analysis.metadata as Record<string, unknown> | undefined,
@@ -199,7 +250,7 @@ export class Analyzer {
     category: string;
     confidence: number;
   }> {
-    if (!this.aiEnabled || !this.classifierService) {
+    if (!this.aiEnabled || !this.activeProvider) {
       return {
         category: analysis.category,
         confidence: 0.5,
@@ -207,7 +258,7 @@ export class Analyzer {
     }
 
     try {
-      return await this.classifierService.classifyFile({
+      return await this.activeProvider.classifyFile({
         filename: analysis.filename,
         content: analysis.textContent,
         metadata: analysis.metadata as Record<string, unknown> | undefined,

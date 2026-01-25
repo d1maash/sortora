@@ -15,6 +15,24 @@ export { EmbeddingService } from './ai/embeddings.js';
 export { ClassifierService } from './ai/classifier.js';
 export { OCRService } from './ai/ocr.js';
 
+// AI Providers exports
+export {
+  type AIProvider,
+  type ProviderConfig,
+  type ProviderType,
+  type ClassificationRequest,
+  type ClassificationResult,
+  type ProviderManagerConfig,
+  ProviderManager,
+  createProvider,
+  listProviders,
+  OpenAIProvider,
+  AnthropicProvider,
+  GeminiProvider,
+  OllamaProvider,
+  LocalProvider,
+} from './ai/providers/index.js';
+
 // Config exports
 export {
   loadConfig,
