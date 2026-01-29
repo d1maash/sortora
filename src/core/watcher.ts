@@ -16,6 +16,7 @@ export interface WatcherOptions {
 
 export interface WatcherEvents {
   file: (file: FileAnalysis) => void;
+  changed: (file: FileAnalysis) => void;
   organized: (file: FileAnalysis, destination: string) => void;
   skipped: (file: FileAnalysis, reason: string) => void;
   error: (error: Error) => void;
@@ -68,6 +69,11 @@ export class Watcher extends EventEmitter {
       this.handleFileAdded(filePath);
     });
 
+    // #15: Handle change events
+    this.watcher.on('change', (filePath) => {
+      this.handleFileChanged(filePath);
+    });
+
     this.watcher.on('error', (error) => {
       this.emit('error', error);
     });
@@ -96,6 +102,21 @@ export class Watcher extends EventEmitter {
     const timeout = setTimeout(async () => {
       this.pendingFiles.delete(filePath);
       await this.processFile(filePath);
+    }, this.options.debounceMs);
+
+    this.pendingFiles.set(filePath, timeout);
+  }
+
+  // #15: Handle file change events
+  private handleFileChanged(filePath: string): void {
+    const existing = this.pendingFiles.get(filePath);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timeout = setTimeout(async () => {
+      this.pendingFiles.delete(filePath);
+      await this.processChangedFile(filePath);
     }, this.options.debounceMs);
 
     this.pendingFiles.set(filePath, timeout);
@@ -134,6 +155,30 @@ export class Watcher extends EventEmitter {
       } else {
         // Just emit the suggestion for manual handling
         this.emit('skipped', analysis, 'Requires confirmation');
+      }
+    } catch (error) {
+      this.emit('error', error instanceof Error ? error : new Error('Unknown error'));
+    }
+  }
+
+  // #15: Process changed files - re-analyze and re-suggest
+  private async processChangedFile(filePath: string): Promise<void> {
+    try {
+      const analysis = await this.analyzer.analyze(filePath);
+      this.emit('changed', analysis);
+
+      // Re-evaluate rules for changed file
+      if (this.options.auto) {
+        const suggestion = this.suggester.generateSuggestion(analysis);
+
+        if (suggestion && suggestion.confidence >= this.options.minConfidence! && !suggestion.requiresConfirmation) {
+          const result = await this.executor.execute(suggestion);
+          if (result.success) {
+            this.emit('organized', analysis, suggestion.destination);
+          } else {
+            this.emit('error', new Error(result.error || 'Execution failed'));
+          }
+        }
       }
     } catch (error) {
       this.emit('error', error instanceof Error ? error : new Error('Unknown error'));
