@@ -43,5 +43,5 @@ export {
   type AppPaths,
 } from './config.js';
 
-// Version
-export const VERSION = '0.1.0';
+// Version - re-export from config to avoid duplication (#9)
+export { VERSION } from './config.js';

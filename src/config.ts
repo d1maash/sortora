@@ -1,10 +1,36 @@
-import { homedir } from 'os';
-import { join } from 'path';
+import { homedir, platform } from 'os';
+import { join, dirname } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { fileURLToPath } from 'url';
 import YAML from 'yaml';
 import { z } from 'zod';
 
-export const VERSION = '1.1.1';
+// #9: Read version from package.json instead of hardcoding
+function getPackageVersion(): string {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    return pkg.version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+export const VERSION = getPackageVersion();
+
+// #4: Platform-specific default trash path
+function getDefaultTrashPath(): string {
+  switch (platform()) {
+    case 'win32':
+      return '~/sortora-trash';
+    case 'darwin':
+      return '~/.Trash';
+    default:
+      return '~/.local/share/Trash/files';
+  }
+}
 
 // AI Provider configuration schema
 const AIProviderSchema = z.object({
@@ -44,7 +70,7 @@ const ConfigSchema = z.object({
     ]),
   }).default({}),
   ai: AIProviderSchema,
-  destinations: z.record(z.string()).default({
+  destinations: z.record(z.string()).default(() => ({
     photos: '~/Pictures/Sorted',
     screenshots: '~/Pictures/Screenshots',
     documents: '~/Documents/Sorted',
@@ -54,8 +80,8 @@ const ConfigSchema = z.object({
     music: '~/Music/Sorted',
     video: '~/Videos/Sorted',
     archives: '~/Archives',
-    trash: '~/.Trash',
-  }),
+    trash: getDefaultTrashPath(),
+  })),
   rules: z.array(z.object({
     name: z.string(),
     priority: z.number().default(50),
@@ -92,9 +118,22 @@ export interface AppPaths {
   rulesFile: string;
 }
 
+// #3: Platform-specific config paths
 export function getAppPaths(): AppPaths {
-  const configDir = join(homedir(), '.config', 'sortora');
-  const dataDir = join(homedir(), '.local', 'share', 'sortora');
+  const isWindows = platform() === 'win32';
+
+  let configDir: string;
+  let dataDir: string;
+
+  if (isWindows) {
+    const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
+    configDir = join(appData, 'sortora');
+    dataDir = join(localAppData, 'sortora');
+  } else {
+    configDir = join(homedir(), '.config', 'sortora');
+    dataDir = join(homedir(), '.local', 'share', 'sortora');
+  }
 
   return {
     configDir,
@@ -148,14 +187,25 @@ export function saveConfig(config: Config): void {
   writeFileSync(paths.configFile, content, 'utf-8');
 }
 
-export function expandPath(path: string): string {
-  if (path.startsWith('~/')) {
-    return join(homedir(), path.slice(2));
+// #5: Handle Windows environment variables (%USERPROFILE%, %APPDATA%, etc.)
+export function expandPath(inputPath: string): string {
+  let result = inputPath;
+
+  if (result.startsWith('~/') || result === '~') {
+    return join(homedir(), result.slice(result === '~' ? 1 : 2));
   }
-  if (path.startsWith('$HOME/')) {
-    return join(homedir(), path.slice(6));
+  if (result.startsWith('$HOME/') || result === '$HOME') {
+    return join(homedir(), result.slice(result === '$HOME' ? 5 : 6));
   }
-  return path;
+
+  // Handle Windows environment variables like %USERPROFILE%, %APPDATA%, etc.
+  if (platform() === 'win32') {
+    result = result.replace(/%([^%]+)%/g, (match, varName: string) => {
+      return process.env[varName] || match;
+    });
+  }
+
+  return result;
 }
 
 export function getDestination(config: Config, key: string): string {
@@ -169,6 +219,42 @@ export function getDestination(config: Config, key: string): string {
 export const DEFAULT_CONFIG: Config = ConfigSchema.parse({});
 
 export type AIProviderType = 'local' | 'openai' | 'anthropic' | 'gemini' | 'ollama';
+
+// #13: Validate AI API key format
+export function validateAPIKey(provider: AIProviderType, key: string): { valid: boolean; message?: string } {
+  if (!key || key.trim().length === 0) {
+    return { valid: false, message: 'API key cannot be empty' };
+  }
+
+  switch (provider) {
+    case 'openai':
+      if (!key.startsWith('sk-')) {
+        return { valid: false, message: 'OpenAI API keys should start with "sk-"' };
+      }
+      if (key.length < 20) {
+        return { valid: false, message: 'OpenAI API key seems too short' };
+      }
+      return { valid: true };
+
+    case 'anthropic':
+      if (!key.startsWith('sk-ant-')) {
+        return { valid: false, message: 'Anthropic API keys should start with "sk-ant-"' };
+      }
+      if (key.length < 20) {
+        return { valid: false, message: 'Anthropic API key seems too short' };
+      }
+      return { valid: true };
+
+    case 'gemini':
+      if (key.length < 10) {
+        return { valid: false, message: 'Gemini API key seems too short' };
+      }
+      return { valid: true };
+
+    default:
+      return { valid: true };
+  }
+}
 
 /**
  * Get the AI provider configuration, with environment variable overrides
@@ -207,6 +293,12 @@ export function getAIProviderConfig(config: Config): Config['ai'] {
     aiConfig.anthropic = {
       ...aiConfig.anthropic,
       apiKey: process.env.ANTHROPIC_API_KEY,
+    };
+  }
+  if (process.env.ANTHROPIC_BASE_URL) {
+    aiConfig.anthropic = {
+      ...aiConfig.anthropic,
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
     };
   }
   if (process.env.ANTHROPIC_MODEL) {
