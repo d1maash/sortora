@@ -2,8 +2,7 @@
 
 <p align="center">
   <strong>Smart offline file organizer with AI-powered classification</strong>
-</p>
-
+</p> teest 
 <p align="center">
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
